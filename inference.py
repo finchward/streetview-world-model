@@ -10,6 +10,7 @@ fig, ax, im = None, None, None
 @torch.no_grad()
 def sample_next_img(model, device, sample_name, prev_img, movement, latent, next_img=None):
     model.eval()
+    base_img = prev_img.clone()
     global fig, ax, im
     if fig is None:
         plt.ion()
@@ -42,4 +43,7 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
     target = np.transpose(next_img.squeeze(0).detach().cpu().numpy(), (1, 2, 0))
     save_path = os.path.join(model_dir, f"sample_{sample_name}_target.png")
     plt.imsave(save_path, np.clip(target, 0, 1))
+    base = np.transpose(base_img.squeeze(0).detach().cpu().numpy(), (1, 2, 0))
+    save_path = os.path.join(model_dir, f"sample_{sample_name}_base.png")
+    plt.imsave(save_path, np.clip(base, 0, 1))
 

@@ -28,69 +28,70 @@ class StreetViewTab:
         self.page = page
 
     async def take_screenshot(self):
-        screenshot_bytes = await self.page.screenshot()
+        screenshot_bytes = await self.page.screenshot(timeout=180_000)
         image = Image.open(io.BytesIO(screenshot_bytes)).convert('RGB')
         transform = transforms.Compose([
             transforms.Resize(Config.model_resolution),    
             transforms.ToTensor(),             # Convert to tensor
-            transforms.Normalize(              # Normalize tensor
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
+            # transforms.Normalize(              # Normalize tensor
+            #     mean=[0.485, 0.456, 0.406],
+            #     std=[0.229, 0.224, 0.225]
+            # )
         ])
 
         tensor = transform(image)
         return tensor
 
     async def move(self):
-        element = self.page.locator('div[aria-label="Street View"]')
-        bounding_box = await element.bounding_box()
+        await self.page.wait_for_selector('canvas.aFsglc', timeout=180_000)   
+        element = self.page.locator('canvas.aFsglc').first
+        box = await element.bounding_box()
+        if not box:
+            return
+
+        async def sample_point():
+            """Keep sampling until point is on canvas.aFsglc."""
+            while True:
+                rx = random.random()
+                ry = random.random()
+                x = box['x'] + rx * box['width']
+                y = box['y'] + ry * box['height']
+                hit = await self.page.evaluate(
+                    """([x, y]) => document.elementFromPoint(x, y)?.className || null""",
+                    [x, y]
+                )
+                if hit and "aFsglc" in hit:
+                    return x, y, rx, ry
 
         is_rotation = random.random() < Config.rotation_probability
         if is_rotation:
-            width = bounding_box['width'] - 2
-            height = bounding_box['height'] - 2
-            x1 = width * random.random() + 1
-            y1 = height * random.random() + 1
+            # Pick two valid points
+            x1, y1, _, _ = await sample_point()
+            x2, y2, _, _ = await sample_point()
 
-            x2 = width * random.random() + 1
-            y2 = height * random.random() + 1
-            start = {
-                "button": 0,      
-                "buttons": 1,      
-                "clientX": x1,
-                "clientY": y1
-            }
+            await self.page.mouse.move(x1, y1)
+            await self.page.mouse.down(button="left")
+            await self.page.mouse.move(x2, y2, steps=15)
+            await self.page.mouse.up(button="left")
+            await asyncio.sleep(4)
 
-            end = {
-                "button": 0,
-                "buttons": 1,      
-                "clientX": x2,
-                "clientY": y2
-            }
-
-            await element.dispatch_event("mousedown", start)
-            await element.dispatch_event("mousemove", end)
-            await element.dispatch_event("mouseup", end)
-
-            v1 = convert_to_vector(x1, y1, width, height)
-            v2 =  convert_to_vector(x2, y2, width, height)
+            # Convert to vectors relative to box
+            v1 = convert_to_vector(x1 - box['x'], y1 - box['y'], box['width'], box['height'])
+            v2 = convert_to_vector(x2 - box['x'], y2 - box['y'], box['width'], box['height'])
             axis = np.cross(v1, v2)
-            axis_norm = np.linalg.norm(axis)
-            axis /= axis_norm
+            axis /= np.linalg.norm(axis)
             dot = np.clip(np.dot(v1, v2), -1.0, 1.0)
             theta = np.arccos(dot)
             wq = np.cos(theta / 2.0)
             s = np.sin(theta / 2.0)
             xq, yq, zq = axis * s
             return [wq, xq, yq, zq, 0, 0]
-        else:
-            rx = random.random()
-            ry = random.random()
-            x = bounding_box['width'] * rx
-            y = bounding_box['height'] * ry
 
-            await element.click(force=True, position={"x": x, "y": y})
+        else:
+            x, y, rx, ry = await sample_point()
+            await self.page.mouse.move(x, y)
+            await self.page.mouse.click(x, y)
+            await asyncio.sleep(4)
             return [1, 0, 0, 0, rx - 0.5, ry - 0.5]
 
 class Simulator():

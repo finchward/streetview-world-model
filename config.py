@@ -7,11 +7,12 @@ class Config:
     loaded_model = "v2"
     loaded_checkpoint = "abc"
 
-    sample_every_x_batches = 198 #avoid being divisible by latent_persistence_turns
-    inference_samples = 200
-    inference_step_size = 5
+    sample_every_x_batches = 48 #avoid being divisible by latent_persistence_turns
+    inference_samples = 300
+    inference_step_size = 1
+    img_dir = 'images'
 
-    model_resolution = (512, 384)
+    model_resolution = (384, 512)
     features = [64, 128, 256, 512, 1024] 
     #64 -> 128 -> 256 -> 512 -> 1024/16 ->| 2048/16 |  -> 1024/32 append 2048/32 -> 1024/32 -> 512/64 -> 256/128 -> 128/256 -> 64/512
     #256 -> 128 -> 64 -> 32 -> 16 |  192 -> 96 -> 48 -> 24 -> 12
@@ -23,7 +24,7 @@ class Config:
     movement_embedding_dim = 512
     latent_dimension = 1024
     max_batches = 1000
-    rotation_probability = 0.7
+    rotation_probability = 0.6
     initial_pages = [ 
         r"https://www.google.com/maps/@-38.5922817,176.8199381,3a,75y,271.3h,104.26t/data=!3m7!1e1!3m5!1s1Pt-bx9x0-vdMyd-R05xZw!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D-14.260361780245958%26panoid%3D1Pt-bx9x0-vdMyd-R05xZw%26yaw%3D271.30228279891134!7i13312!8i6656?entry=ttu&g_ep=EgoyMDI1MDkwNy4wIKXMDSoASAFQAw%3D%3D",
         #r"https://www.google.com/maps/place/Pukaki+Canal+Road,+Canterbury+Region+7999/@-44.3213197,170.0447441,3a,75y,195.92h,96.45t/data=!3m7!1e1!3m5!1sI9B-vhHlUJpLWYoqiLarOw!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D-6.447370168190574%26panoid%3DI9B-vhHlUJpLWYoqiLarOw%26yaw%3D195.9163922970516!7i16384!8i8192!4m6!3m5!1s0x6d2ae1d22564538b:0xac6cf5a0c84835c2!8m2!3d-44.2098275!4d170.0758422!16s%2Fg%2F11h6yd4mrn?entry=ttu&g_ep=EgoyMDI1MDkwNy4wIKXMDSoASAFQAw%3D%3D",

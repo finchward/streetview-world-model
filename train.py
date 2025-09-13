@@ -80,7 +80,6 @@ class Trainer:
             # latent_state = self.model.predict_dynamics(prev_img, latent_state) #here we are encoding the same image we are using to predict next frame.
             #it might be useful to encode the state of the frame we are using to predict, but maybe redundant.
             #try changing latent state to here during training and see what happens
-            
             movement = (await self.simulator.move()).to(self.device).float() #[num_pages, 6]
             next_img = (await self.simulator.get_images()).to(self.device).float() #[num_pages, 3, w, h]
             v_target = next_img - prev_img # [n, 3, w, h]
@@ -105,7 +104,7 @@ class Trainer:
                 self.optimizer.zero_grad()
                 latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)               
 
-            if (idx + 1) % Config.sample_every_x_batches == 0:
+            if idx % Config.sample_every_x_batches == 0:
                 with torch.no_grad():
                     sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), movement[0:1, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
 
