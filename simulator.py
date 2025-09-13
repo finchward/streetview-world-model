@@ -31,7 +31,7 @@ class StreetViewTab:
         screenshot_bytes = await self.page.screenshot()
         image = Image.open(io.BytesIO(screenshot_bytes)).convert('RGB')
         transform = transforms.Compose([
-            transforms.Resize(Config.model_resolution),    # Resize to 256x256
+            transforms.Resize(Config.model_resolution),    
             transforms.ToTensor(),             # Convert to tensor
             transforms.Normalize(              # Normalize tensor
                 mean=[0.485, 0.456, 0.406],
@@ -46,7 +46,7 @@ class StreetViewTab:
         element = self.page.locator('div[aria-label="Street View"]')
         bounding_box = await element.bounding_box()
 
-        is_rotation = random.random() < Config.pan_probability
+        is_rotation = random.random() < Config.rotation_probability
         if is_rotation:
             width = bounding_box['width'] - 2
             height = bounding_box['height'] - 2
@@ -96,18 +96,24 @@ class StreetViewTab:
 class Simulator():
     def __init__(self):
         self.initial_pages = Config.initial_pages
+        self.browser = None
+        self.context = None
+        self.playwright = None
 
     async def setup(self):
-        initial_pages = self.initial_pages
-        async with async_playwright() as p:
-            num_instances = len(initial_pages)
-            browser = await p.chromium.launch(headless=False)
-            context = await browser.new_context()
-            pages = await asyncio.gather(*(context.new_page() for _ in range(num_instances)))
-            self.tabs = [StreetViewTab(i, page) for i, page in enumerate(pages)]
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=False)
+        self.context = await self.browser.new_context()
 
-            await asyncio.gather(*(tab.page.goto(initial_pages[i]) for i, tab in enumerate(self.tabs)))
-            print("All tabs loaded")
+        pages = await asyncio.gather(*(self.context.new_page() for _ in self.initial_pages))
+        self.tabs = [StreetViewTab(i, page) for i, page in enumerate(pages)]
+        await asyncio.gather(*(tab.page.goto(self.initial_pages[i]) for i, tab in enumerate(self.tabs)))
+        print("All tabs loaded")
+
+    async def close(self):
+        await self.context.close()
+        await self.browser.close()
+        await self.playwright.stop()
 
     async def get_images(self):
         images_list = await asyncio.gather(*(tab.take_screenshot() for tab in self.tabs))

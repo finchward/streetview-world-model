@@ -6,7 +6,7 @@ from config import Config
 
 
 class ResBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, is_conditioned=True):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(out_channels)
@@ -14,21 +14,24 @@ class ResBlock(nn.Module):
         self.bn2 = nn.BatchNorm2d(out_channels)
         self.relu = nn.LeakyReLU(inplace=True)
 
-        self.condition = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension + Config.time_embedding_dim, out_channels*2)
+        self.is_conditioned = is_conditioned
+        if is_conditioned:
+            self.condition = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension + Config.time_embedding_dim, out_channels*2)
         #self.memory_conditioning = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension, out_channels)
         #self.time_conditioning = nn.Linear(Config.time_embedding_dim, out_channels)
         self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
     
-    def forward(self, x, conditioning):
+    def forward(self, x, conditioning=None):
         fx = self.relu(self.bn1(self.conv1(x))) # test no batchnorm
         fx = self.bn2(self.conv2(fx))
 
-        gamma_beta = self.condition(conditioning)
-        gamma, beta = gamma_beta.chunk(2, dim=1)
-        gamma_scaled = gamma.unsqueeze(-1).unsqueeze(-1)
-        beta_scaled = beta.unsqueeze(-1).unsqueeze(-1)
-        #Test doing a layer/groupnorm here before we modulate to be more like adaGN.
-        fx = fx * gamma_scaled + beta_scaled
+        if self.is_conditioned:
+            gamma_beta = self.condition(conditioning)
+            gamma, beta = gamma_beta.chunk(2, dim=1)
+            gamma_scaled = gamma.unsqueeze(-1).unsqueeze(-1)
+            beta_scaled = beta.unsqueeze(-1).unsqueeze(-1)
+            #Test doing a layer/groupnorm here before we modulate to be more like adaGN.
+            fx = fx * gamma_scaled + beta_scaled
 
         hx = self.relu(fx + self.shortcut(x))
         return hx
@@ -67,7 +70,7 @@ class Dynamics(nn.Module):
         features = Config.features
         layers = []
         for feature in features:
-            layers.append(ResBlock(in_channels, feature))
+            layers.append(ResBlock(in_channels, feature, is_conditioned=False))
             layers.append(nn.Conv2d(feature, feature, kernel_size=3, stride=2, padding=1))
             in_channels = feature
         layers.append(nn.AdaptiveAvgPool2d((1, 1)))
@@ -132,7 +135,7 @@ class UNet(nn.Module):
 
             #Maybe do conditioning here
         
-        x = self.bottleneck(x) # add transformer layers here.
+        x = self.bottleneck(x, conditioning_emb) # add transformer layers here.
         
         skip_connections = skip_connections[::-1]
         for idx in range(len(self.ups)):

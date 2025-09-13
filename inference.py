@@ -1,29 +1,31 @@
 from config import Config
-from model import get_decoder
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-
+import tqdm
 
 fig, ax, im = None, None, None
 
 @torch.no_grad()
-def sample_next_img(model, sample_name, prev_img, movement, latent, next_img=None):
+def sample_next_img(model, device, sample_name, prev_img, movement, latent, next_img=None):
     model.eval()
     global fig, ax, im
     if fig is None:
         plt.ion()
         fig, ax = plt.subplots()
-        im = ax.imshow(np.zeros((Config.image_resolution, Config.image_resolution, 3), dtype=np.float32))
+        im = ax.imshow(np.zeros((Config.model_resolution[0], Config.model_resolution[1], 3), dtype=np.float32))
         ax.axis("off")
         plt.show()
 
     out_img = None
-    for time_step in range(Config.inference_samples):
+    pbar = tqdm.tqdm(range(Config.inference_samples), desc=f'Sampling')
+    for time_step in pbar:
+        time_step = torch.tensor([time_step]).to(device)
         dx = Config.inference_step_size / Config.inference_samples
         delta = model.predict_delta(prev_img, time_step, movement, latent)
         prev_img += delta * dx
+        prev_img = torch.clamp(prev_img, 0, 1)
 
         out_img = prev_img.squeeze(0).detach().cpu().numpy()
         out_img = np.transpose(out_img, (1, 2, 0))

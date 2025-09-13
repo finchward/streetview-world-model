@@ -15,6 +15,7 @@ class Trainer:
         self.model = model.to(self.device)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
+        self.loss_fn = nn.MSELoss()
 
         self.batch_count = 0
         self.batch_losses = []
@@ -66,51 +67,55 @@ class Trainer:
         self.grapher.update_line(0, "Training", grouped_indices, grouped_losses) #for performance
 
 #every tick, we start by feeding in previous frame and input and previous frame's latent state. New frame produced and that is used (with input maybe) to get new latent state
-    def train(self):
+    async def train(self):
         self.model.train()
-        self.optimizer.zero_grad()
-        prev_img = self.simulator.get_images().to(self.device)
-        latent_state = None
+        prev_img = (await self.simulator.get_images()).to(self.device).float()
         num_samples = len(Config.initial_pages)
+        latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)
+        unrolled_loss = 0
+        self.optimizer.zero_grad()
+
         pbar = tqdm.tqdm(range(Config.max_batches), desc=f'Batch {self.batch_count}/{Config.max_batches}')
-        for idx in pbar:
-            if idx % Config.latent_persistence_turns == 0:
-                #Reset latent.
-                latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)
-            
+        for idx in pbar:            
             # latent_state = self.model.predict_dynamics(prev_img, latent_state) #here we are encoding the same image we are using to predict next frame.
             #it might be useful to encode the state of the frame we are using to predict, but maybe redundant.
             #try changing latent state to here during training and see what happens
             
-            movement = self.simulator.move().to(self.device) #[num_pages, 6]
-            next_img = self.simulator.get_images().to(self.device) #[num_pages, 3, w, h]
-
+            movement = (await self.simulator.move()).to(self.device).float() #[num_pages, 6]
+            next_img = (await self.simulator.get_images()).to(self.device).float() #[num_pages, 3, w, h]
             v_target = next_img - prev_img # [n, 3, w, h]
+
             total_loss = 0
             for i in range(Config.predictions_per_image):
                 time = torch.rand((num_samples), device=self.device)
-                pt = prev_img + v_target * time.view(num_samples, 3, 1, 1)
+                pt = prev_img + v_target * time.view(num_samples, 1, 1, 1)
                 v_pred = self.model.predict_delta(pt, time, movement, latent_state)
-                loss = nn.MSELoss(v_pred, v_target)
+                loss = self.loss_fn(v_pred, v_target)
                 total_loss += loss / Config.predictions_per_image
 
             self.batch_losses.append(total_loss.item())
             self.batch_count += 1      
+            unrolled_loss += total_loss / Config.latent_persistence_turns
 
-            if idx % Config.sample_every_x_batches == 0:
-                sample_next_img(self.model, f"batch_{idx}", prev_img[0:1, :, :, :], movement, latent_state, next_img[0:1, :, :, :])
+            if (idx + 1) % Config.latent_persistence_turns == 0:
+                #Reset latent.
+                unrolled_loss.backward()
+                self.optimizer.step()
+                unrolled_loss = 0
+                self.optimizer.zero_grad()
+                latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)               
 
-            total_loss.backward()
+            if (idx + 1) % Config.sample_every_x_batches == 0:
+                with torch.no_grad():
+                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), movement[0:1, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+
             #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
-            self.optimizer.step()
-            self.optimizer.zero_grad()
             pbar.set_postfix({"Batch loss": total_loss.item()})
-            if idx % Config.graph_update_freq:
+            if idx % Config.graph_update_freq == 0:
                 self.update_graph()
 
-
             latent_state = self.model.predict_dynamics(prev_img, latent_state)
-            prev_img = next_img
+            prev_img = next_img.detach().clone()
             
 
 
