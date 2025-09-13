@@ -2,86 +2,163 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from config import Config
 
-class Encoder(nn.Module):
-    def __init__(self, initial_hidden_dim=32,  image_dim=256, latent_dim=512):
+
+class ResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-        num_layers = int(math.log2(image_dim)) - 2
-        layers = [
-            nn.Conv2d(in_channels=3, out_channels=initial_hidden_dim, padding=1, kernel_size=3, stride=2),
-            nn.BatchNorm2d(initial_hidden_dim),
-            nn.LeakyReLU(inplace=True)
-            ]
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.LeakyReLU(inplace=True)
 
-        for layer_num in range(num_layers - 1):
-            layer_input_dim = initial_hidden_dim * (2 ** layer_num)
-            layers.extend([
-                nn.Conv2d(in_channels=layer_input_dim, out_channels=layer_input_dim*2,  padding=1, kernel_size=3, stride=2),
-                nn.BatchNorm2d(layer_input_dim*2),
-                nn.LeakyReLU(inplace=True)
-               ])
-
-
-        self.encode = nn.Sequential(*layers)
-        final_size = initial_hidden_dim * 2 ** (num_layers-1) * 4 * 4
-        self.mu_head = nn.Linear(final_size, latent_dim)
-        self.logvar_head = nn.Linear(final_size, latent_dim)
+        self.condition = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension + Config.time_embedding_dim, out_channels*2)
+        #self.memory_conditioning = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension, out_channels)
+        #self.time_conditioning = nn.Linear(Config.time_embedding_dim, out_channels)
+        self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
     
-    def forward(self, x):
-        hidden_state = self.encode(x) # [batch_size, hidden_dim, 4, 4]
-        hidden_state = hidden_state.view(hidden_state.size(0), -1)
-        mu = self.mu_head(hidden_state)
-        logvar = self.logvar_head(hidden_state)
-        return mu, logvar
-    
+    def forward(self, x, conditioning):
+        fx = self.relu(self.bn1(self.conv1(x))) # test no batchnorm
+        fx = self.bn2(self.conv2(fx))
 
-class Decoder(nn.Module):
-    def __init__(self, initial_hidden_dim=32, image_dim=256, latent_dim=512):
+        gamma_beta = self.condition(conditioning)
+        gamma, beta = gamma_beta.chunk(2, dim=1)
+        gamma_scaled = gamma.unsqueeze(-1).unsqueeze(-1)
+        beta_scaled = beta.unsqueeze(-1).unsqueeze(-1)
+        #Test doing a layer/groupnorm here before we modulate to be more like adaGN.
+        fx = fx * gamma_scaled + beta_scaled
+
+        hx = self.relu(fx + self.shortcut(x))
+        return hx
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-        num_layers = int(math.log2(image_dim)) - 2
-        encoder_dim = initial_hidden_dim * 2 ** (num_layers-1) * 4 * 4
-        split_dim = encoder_dim // 16
-        self.project = nn.Linear(latent_dim, encoder_dim)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.LeakyReLU(inplace=True)
+
+        self.condition = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension + Config.time_embedding_dim, out_channels*2)
+        #self.memory_conditioning = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension, out_channels)
+        #self.time_conditioning = nn.Linear(Config.time_embedding_dim, out_channels)
+    
+    def forward(self, x, conditioning):
+        fx = self.relu(self.bn1(self.conv1(x))) # test no batchnorm
+        fx = self.bn2(self.conv2(fx))
+
+        gamma_beta = self.condition(conditioning)
+        gamma, beta = gamma_beta.chunk(2, dim=1)
+        gamma_scaled = gamma.unsqueeze(-1).unsqueeze(-1)
+        beta_scaled = beta.unsqueeze(-1).unsqueeze(-1)
+        #Test doing a layer/groupnorm here before we modulate to be more like adaGN.
+        fx = fx * gamma_scaled + beta_scaled
+
+        hx = self.relu(fx)
+        return hx
+
+class Dynamics(nn.Module):
+    def __init__(self, in_channels=3):
+        #Give the dynamics the current timestep too - integer, not the float 0-1.
+        super().__init__()
+        features = Config.features
         layers = []
-        for layer_num in range(num_layers-1):
-            layer_input_dim = split_dim // (2**layer_num)
-            layer_output_dim = layer_input_dim // 2
-            layers.extend([
-                nn.ConvTranspose2d(in_channels=layer_input_dim, out_channels=layer_output_dim, kernel_size=3, stride=2, padding=1, output_padding=1),
-                nn.BatchNorm2d(layer_output_dim),
-                nn.LeakyReLU(inplace=True),
-            ])
-        decoder_dim = split_dim // (2**(num_layers-1))
-        layers.extend([
-            nn.ConvTranspose2d(in_channels=decoder_dim, out_channels=3, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.Sigmoid()
-        ])
-        self.decode = nn.Sequential(*layers)
+        for feature in features:
+            layers.append(ResBlock(in_channels, feature))
+            layers.append(nn.Conv2d(feature, feature, kernel_size=3, stride=2, padding=1))
+            in_channels = feature
+        layers.append(nn.AdaptiveAvgPool2d((1, 1)))
+        self.down = nn.Sequential(*layers)
+
+        self.project_img = nn.Linear(features[-1], Config.latent_dimension)
+        self.predict = nn.Linear(Config.latent_dimension*2, Config.latent_dimension)
+
+    def forward(self, img, prev_state):
+        latent_img = self.down(img).squeeze(-1).squeeze(-1)
+        latent_img = self.project_img(latent_img)
+        state = torch.cat((latent_img, prev_state), dim=1)
+        new_state = self.predict(state)
+        return new_state
 
 
-    def forward(self, x):
-        projected = self.project(x) # [batch_num, hidden_dim*4*4]
-        projected = projected.view(projected.size(0), -1, 4, 4)
-        prediction = self.decode(projected)
-        return prediction
-
-
-
-class Vae(nn.Module):
-    def __init__(self, config):
+class UNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3):
         super().__init__()
-        self.encoder = Encoder(config.initial_hidden_dim, config.image_resolution, config.latent_dim)
-        self.decoder = Decoder(config.initial_hidden_dim, config.image_resolution, config.latent_dim)
+        features = Config.features
+        self.downs = nn.ModuleList()
+        self.strides = nn.ModuleList()
+        for feature in features:
+            self.downs.append(ResBlock(in_channels, feature))
+            self.strides.append(nn.Conv2d(feature, feature, kernel_size=3, stride=2, padding=1))
+            in_channels = feature
+        
+        self.bottleneck = ResBlock(features[-1], features[-1]*2)
+        
+        self.ups = nn.ModuleList()
+        self.up_convs = nn.ModuleList()
+        rev_features = features[::-1]
+        for feature in rev_features:
+            self.ups.append(nn.ConvTranspose2d(feature*2, feature, kernel_size=2, stride=2))
+            self.up_convs.append(ConvBlock(feature*2, feature))
+
+        self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
+
+        self.embed_movement = nn.Linear(6, Config.movement_embedding_dim)
+
+        
+    def forward(self, x, t, m, l_emb):
+        skip_connections = []
+
+        #Embedding time step
+        t = t.unsqueeze(-1) #[num_dim, 1]
+        half_time_dim = Config.time_embedding_dim // 2
+        freq_exponents = torch.arange(half_time_dim, dtype=torch.float32, device=t.device)
+        freq_exponents = -math.log(10000) * freq_exponents / half_time_dim
+        freqs = torch.exp(freq_exponents) 
+        freqs = freqs.unsqueeze(0)
+        angles = t * freqs  
+        t_emb = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+
+        m_emb = self.embed_movement(m)
+        conditioning_emb = torch.cat([m_emb, l_emb, t_emb], dim=1)
+
+        for down, stride in zip(self.downs, self.strides):
+            x = down(x, conditioning_emb)
+            skip_connections.append(x)
+            x = stride(x)
+
+            #Maybe do conditioning here
+        
+        x = self.bottleneck(x) # add transformer layers here.
+        
+        skip_connections = skip_connections[::-1]
+        for idx in range(len(self.ups)):
+            x = self.ups[idx](x)
+            skip_connection = skip_connections[idx]
+            
+            if x.shape != skip_connection.shape:
+                x = F.interpolate(x, size=skip_connection.shape[2:])
+            
+            x = torch.cat([skip_connection, x], dim=1)
+            x = self.up_convs[idx](x, conditioning_emb)
+        
+        return self.final_conv(x) #delta predictions in each channel.
+
+class WorldModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.backbone = UNet()
+        self.dynamics = Dynamics()
     
-    def forward(self, in_img):
-        mu, logvar = self.encoder(in_img)
-        epsilon = torch.randn_like(mu)
-        z = mu + torch.exp(0.5 * logvar) * epsilon
-        out_img = self.decoder(z)
-        return out_img, mu, logvar
+    def predict_delta(self, x, t, m, l_emb):
+        return self.backbone(x, t, m, l_emb)
 
-def get_vae(config):
-    return Vae(config)
+    def predict_dynamics(self, img, prev_state):
+        return self.dynamics(img, prev_state)
 
-def get_decoder(config):
-    return Decoder(config.initial_hidden_dim, config.image_resolution, config.latent_dim)
+
+def get_model():
+    return WorldModel()

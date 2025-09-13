@@ -9,7 +9,8 @@ import os
 fig, ax, im = None, None, None
 
 @torch.no_grad()
-def sample_image(model, device, name):
+def sample_next_img(model, sample_name, prev_img, movement, latent, next_img=None):
+    model.eval()
     global fig, ax, im
     if fig is None:
         plt.ion()
@@ -18,17 +19,25 @@ def sample_image(model, device, name):
         ax.axis("off")
         plt.show()
 
-    z = torch.randn((1, Config.latent_dim)).to(device)
-    out_img = model(z).squeeze(0).detach().cpu().numpy()
-    out_img = np.transpose(out_img, (1, 2, 0))
+    out_img = None
+    for time_step in range(Config.inference_samples):
+        dx = Config.inference_step_size / Config.inference_samples
+        delta = model.predict_delta(prev_img, time_step, movement, latent)
+        prev_img += delta * dx
 
-    im.set_data(out_img)
-    fig.canvas.draw()
-    fig.canvas.flush_events()
+        out_img = prev_img.squeeze(0).detach().cpu().numpy()
+        out_img = np.transpose(out_img, (1, 2, 0))
+        im.set_data(out_img)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
 
     model_dir = os.path.join(Config.img_dir, Config.model_name)
     if not os.path.exists(model_dir):
             os.makedirs(model_dir, exist_ok=True)
-    save_path = os.path.join(model_dir, f"sample_{name}.png")
+    save_path = os.path.join(model_dir, f"sample_{sample_name}.png")
     plt.imsave(save_path, np.clip(out_img, 0, 1))
+
+    target = np.transpose(next_img.squeeze(0).detach().cpu().numpy(), (1, 2, 0))
+    save_path = os.path.join(model_dir, f"sample_{sample_name}_target.png")
+    plt.imsave(save_path, np.clip(target, 0, 1))
 
