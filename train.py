@@ -9,9 +9,19 @@ from grapher import Grapher
 from inference import sample_next_img
 from config import Config
 
+if Config.is_colab:
+    from google.colab import drive
+    drive.mount('/content/drive')
+
+if Config.is_tpu:
+    import torch_xla.core.xla_model as xm
+
 class Trainer:
     def __init__(self, model, simulator):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if Config.is_tpu:
+            self.device = xm.xla_device()
+        else:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model.to(self.device)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
@@ -22,7 +32,10 @@ class Trainer:
         self.grapher = Grapher()
 
     def save_checkpoint(self, name):
-        check_dir = Path.cwd() / 'checkpoints' / Config.model_name
+        if Config.is_colab:
+            check_dir = Path(Config.drive_dir) / 'checkpoints' / Config.model_name
+        else:
+            check_dir = Path.cwd() / 'checkpoints' / Config.model_name
         if not check_dir.exists():
             check_dir.mkdir(exist_ok=True, parents=True)
         checkpoint = {
@@ -35,7 +48,10 @@ class Trainer:
         torch.save(checkpoint, checkpoint_path)
 
     def load_checkpoint(self):
-        checkpoint_path = Path.cwd() / 'checkpoints' / Config.load_model / Config.loaded_checkpoint
+        if Config.is_colab:
+            checkpoint_path = Path(Config.drive_dir) / 'checkpoints' / Config.load_model / Config.loaded_checkpoint
+        else:
+            checkpoint_path = Path.cwd() / 'checkpoints' / Config.load_model / Config.loaded_checkpoint
         checkpoint = torch.load(checkpoint_path)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -69,6 +85,7 @@ class Trainer:
 #every tick, we start by feeding in previous frame and input and previous frame's latent state. New frame produced and that is used (with input maybe) to get new latent state
     async def train(self):
         self.model.train()
+        print("about to get_images", flush=True)
         prev_img = (await self.simulator.get_images()).to(self.device).float()
         num_samples = len(Config.initial_pages)
         latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)
@@ -96,19 +113,21 @@ class Trainer:
             self.batch_count += 1      
             unrolled_loss += total_loss / Config.latent_persistence_turns
 
+            if idx % Config.sample_every_x_batches == 0:
+                with torch.no_grad():
+                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), movement[0:1, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+
             if (idx + 1) % Config.latent_persistence_turns == 0:
                 #Reset latent.
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
                 unrolled_loss.backward()
                 self.optimizer.step()
                 unrolled_loss = 0
                 self.optimizer.zero_grad()
                 latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)               
 
-            if idx % Config.sample_every_x_batches == 0:
-                with torch.no_grad():
-                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), movement[0:1, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
 
-            #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
+            
             pbar.set_postfix({"Batch loss": total_loss.item()})
             if idx % Config.graph_update_freq == 0:
                 self.update_graph()

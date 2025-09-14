@@ -9,9 +9,9 @@ class ResBlock(nn.Module):
     def __init__(self, in_channels, out_channels, is_conditioned=True):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.bn1 = nn.GroupNorm(num_groups=Config.group_size,  num_channels=out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.bn2 = nn.GroupNorm(num_groups=Config.group_size,  num_channels=out_channels)
         self.relu = nn.LeakyReLU(inplace=True)
 
         self.is_conditioned = is_conditioned
@@ -40,9 +40,9 @@ class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.bn1 = nn.GroupNorm(num_groups=Config.group_size,  num_channels=out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.bn2 = nn.GroupNorm(num_groups=Config.group_size,  num_channels=out_channels)
         self.relu = nn.LeakyReLU(inplace=True)
 
         self.condition = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension + Config.time_embedding_dim, out_channels*2)

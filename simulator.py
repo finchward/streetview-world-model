@@ -103,7 +103,18 @@ class Simulator():
 
     async def setup(self):
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=False)
+        if Config.is_colab:
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--use-gl=swiftshader",
+                    "--disable-software-rasterizer",
+                ]
+            )
+        else:
+            self.browser = await self.playwright.chromium.launch(headless=False) # for colab
         self.context = await self.browser.new_context()
 
         pages = await asyncio.gather(*(self.context.new_page() for _ in self.initial_pages))
