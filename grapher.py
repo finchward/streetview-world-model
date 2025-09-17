@@ -78,12 +78,16 @@ class Grapher:
             self.ax2.autoscale_view()
 
         if Config.is_remote:
-            current_dir = Path.cwd() if Config.is_colab else Path(Config.drive_dir)
+            if Config.is_colab:
+                current_dir = Path.cwd()
+            else:   
+                current_dir = Path(Config.drive_dir)
             graph_dir = current_dir / Path(Config.graph_dir) / Config.model_name
             graph_dir.mkdir(parents=True, exist_ok=True)
 
             save_path = graph_dir / "graph.png"
             self.fig.savefig(save_path, bbox_inches='tight')
+            print(f'Graph saved to {save_path}')
         
         if Config.is_colab:
             clear_output(wait=True)
