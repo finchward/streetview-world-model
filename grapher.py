@@ -1,5 +1,11 @@
-import matplotlib.pyplot as plt
+
+
 from config import Config
+if Config.is_remote:
+    import matplotlib
+    matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 import numpy as np
 from pathlib import Path
 
@@ -70,6 +76,14 @@ class Grapher:
                 self.val_line_2.set_data(x_data, y_data)
             self.ax2.relim()
             self.ax2.autoscale_view()
+
+        if Config.is_remote:
+            current_dir = Path.cwd() if Config.is_colab else Path(Config.drive_dir)
+            graph_dir = current_dir / Path(Config.graph_dir) / Config.model_name
+            graph_dir.mkdir(parents=True, exist_ok=True)
+
+            save_path = graph_dir / "graph.png"
+            self.fig.savefig(save_path, bbox_inches='tight')
         
         if Config.is_colab:
             clear_output(wait=True)

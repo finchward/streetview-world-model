@@ -1,4 +1,3 @@
-
 import asyncio
 from playwright.async_api import async_playwright
 from PIL import Image
@@ -28,7 +27,8 @@ class StreetViewTab:
         self.page = page
 
     async def take_screenshot(self):
-        screenshot_bytes = await self.page.screenshot(timeout=180_000)
+        print(f"  - Tab {self.id}: Capturing screenshot.")
+        screenshot_bytes = await self.page.locator('canvas.aFsglc').first.screenshot(timeout=0)
         image = Image.open(io.BytesIO(screenshot_bytes)).convert('RGB')
         transform = transforms.Compose([
             transforms.Resize(Config.model_resolution),    
@@ -43,7 +43,8 @@ class StreetViewTab:
         return tensor
 
     async def move(self):
-        await self.page.wait_for_selector('canvas.aFsglc', timeout=180_000)   
+        print(f"  - Tab {self.id}: Waiting for canvas to be ready.")
+        await self.page.wait_for_selector('canvas.aFsglc', timeout=0)   
         element = self.page.locator('canvas.aFsglc').first
         box = await element.bounding_box()
         if not box:
@@ -65,6 +66,7 @@ class StreetViewTab:
 
         is_rotation = random.random() < Config.rotation_probability
         if is_rotation:
+            print(f"  - Tab {self.id}: Performing rotation.")
             # Pick two valid points
             x1, y1, _, _ = await sample_point()
             x2, y2, _, _ = await sample_point()
@@ -73,6 +75,8 @@ class StreetViewTab:
             await self.page.mouse.down(button="left")
             await self.page.mouse.move(x2, y2, steps=15)
             await self.page.mouse.up(button="left")
+            
+            print(f"  - Tab {self.id}: Waiting for view to settle after rotation.")
             await asyncio.sleep(4)
 
             # Convert to vectors relative to box
@@ -88,21 +92,27 @@ class StreetViewTab:
             return [wq, xq, yq, zq, 0, 0]
 
         else:
+            print(f"  - Tab {self.id}: Performing forward movement.")
             x, y, rx, ry = await sample_point()
             await self.page.mouse.move(x, y)
             await self.page.mouse.click(x, y)
+
+            print(f"  - Tab {self.id}: Waiting for view to settle after move.")
             await asyncio.sleep(4)
             return [1, 0, 0, 0, rx - 0.5, ry - 0.5]
 
 class Simulator():
-    def __init__(self):
-        self.initial_pages = Config.initial_pages
+    def __init__(self, initial_pages):
+        self.initial_pages = initial_pages
         self.browser = None
         self.context = None
         self.playwright = None
 
     async def setup(self):
+        print("Starting Playwright...")
         self.playwright = await async_playwright().start()
+        
+        print("Launching browser...")
         if Config.is_colab:
             self.browser = await self.playwright.chromium.launch(
                 headless=True,
@@ -114,28 +124,30 @@ class Simulator():
                 ]
             )
         else:
-            self.browser = await self.playwright.chromium.launch(headless=False) # for colab
+            self.browser = await self.playwright.chromium.launch(headless=True) # for colab
+        
+        print("Creating new browser context...")
         self.context = await self.browser.new_context()
 
+        print(f"Creating {len(self.initial_pages)} new pages in browser...")
         pages = await asyncio.gather(*(self.context.new_page() for _ in self.initial_pages))
         self.tabs = [StreetViewTab(i, page) for i, page in enumerate(pages)]
+        
+        print("Navigating all tabs to initial pages...")
         await asyncio.gather(*(tab.page.goto(self.initial_pages[i]) for i, tab in enumerate(self.tabs)))
-        print("All tabs loaded")
+        print("All tabs loaded successfully.")
 
-    async def close(self):
-        await self.context.close()
-        await self.browser.close()
-        await self.playwright.stop()
 
     async def get_images(self):
+        print("Gathering screenshots from all tabs...")
         images_list = await asyncio.gather(*(tab.take_screenshot() for tab in self.tabs))
         images_tensor = torch.stack(images_list) #[page_num, 3, h, w]
+        print("Image gathering complete.")
         return images_tensor
     
     async def move(self):
+        print("Executing moves on all tabs...")
         move_list = await asyncio.gather(*(tab.move() for tab in self.tabs))
         movement_tensor = torch.tensor(move_list)
+        print("Move execution complete.")
         return movement_tensor #[page_num, 6]
-
-
-

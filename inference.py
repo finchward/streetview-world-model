@@ -1,12 +1,13 @@
 from config import Config
+if Config.is_remote:
+    import matplotlib
+    matplotlib.use('Agg')
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import tqdm
 from pathlib import Path
-
-
 
 fig, axes, ims = None, None, None
 if Config.is_colab:
@@ -46,7 +47,10 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
     for time_step in pbar:
         time_step = torch.tensor([time_step]).to(device)
         dx = Config.inference_step_size / Config.inference_samples
-        delta = model.predict_delta(prev_img, time_step, movement, latent)
+        if Config.is_multi_gpu:
+            delta = model.module.predict_delta(prev_img, time_step, movement, latent)
+        else:
+            delta = model.predict_delta(prev_img, time_step, movement, latent)
         prev_img += delta * dx
         prev_img = torch.clamp(prev_img, 0, 1)
         

@@ -8,6 +8,8 @@ import tqdm
 from grapher import Grapher
 from inference import sample_next_img
 from config import Config
+import torch.distributed as dist
+import torch.nn.parallel
 
 if Config.is_colab:
     from google.colab import drive
@@ -18,10 +20,13 @@ if Config.is_tpu:
 
 class Trainer:
     def __init__(self, model, simulator):
-        if Config.is_tpu:
+        if Config.is_multi_gpu:
+            self.device = torch.device('cuda', dist.get_rank())
+        elif Config.is_tpu:
             self.device = xm.xla_device()
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
         self.model = model.to(self.device)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
@@ -32,20 +37,21 @@ class Trainer:
         self.grapher = Grapher()
 
     def save_checkpoint(self, name):
-        if Config.is_colab:
-            check_dir = Path(Config.drive_dir) / 'checkpoints' / Config.model_name
-        else:
-            check_dir = Path.cwd() / 'checkpoints' / Config.model_name
-        if not check_dir.exists():
-            check_dir.mkdir(exist_ok=True, parents=True)
-        checkpoint = {
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'batch_count': self.batch_count,
-            'batch_losses': self.batch_losses,
-        }
-        checkpoint_path = check_dir / name
-        torch.save(checkpoint, checkpoint_path)
+        if not Config.is_multi_gpu or dist.get_rank() == 0:
+            if Config.is_colab:
+                check_dir = Path(Config.drive_dir) / 'checkpoints' / Config.model_name
+            else:
+                check_dir = Path.cwd() / 'checkpoints' / Config.model_name
+            if not check_dir.exists():
+                check_dir.mkdir(exist_ok=True, parents=True)
+            checkpoint = {
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'batch_count': self.batch_count,
+                'batch_losses': self.batch_losses,
+            }
+            checkpoint_path = check_dir / name
+            torch.save(checkpoint, checkpoint_path)
 
     def load_checkpoint(self):
         if Config.is_colab:
@@ -105,7 +111,10 @@ class Trainer:
             for i in range(Config.predictions_per_image):
                 time = torch.rand((num_samples), device=self.device)
                 pt = prev_img + v_target * time.view(num_samples, 1, 1, 1)
-                v_pred = self.model.predict_delta(pt, time, movement, latent_state)
+                if Config.is_multi_gpu:
+                    v_pred = self.model.module.predict_delta(pt, time, movement, latent_state)
+                else:
+                    v_pred = self.model.predict_delta(pt, time, movement, latent_state)
                 loss = self.loss_fn(v_pred, v_target)
                 total_loss += loss / Config.predictions_per_image
 
@@ -132,7 +141,10 @@ class Trainer:
             if idx % Config.graph_update_freq == 0:
                 self.update_graph()
 
-            latent_state = self.model.predict_dynamics(prev_img, latent_state)
+            if Config.is_multi_gpu:
+                latent_state = self.model.module.predict_dynamics(prev_img, latent_state)
+            else:
+                latent_state = self.model.predict_dynamics(prev_img, latent_state)
             prev_img = next_img.detach().clone()
             
 

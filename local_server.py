@@ -1,173 +1,132 @@
+# local_server.py
+
 import asyncio
-import io
-import base64
-import subprocess
-import time
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+import os
 import uvicorn
-import torch
-from PIL import Image
-import json
-import threading
-import requests
+from fastapi import FastAPI, HTTPException, Body
+from fastapi.responses import JSONResponse
+from pyngrok import ngrok
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from typing import List
 
-# Import your original simulator
-from simulator import Simulator as OriginalSimulator
+# Make sure to have simulator.py and config.py in the same directory
+from simulator import Simulator
 
-app = FastAPI(title="Street View Simulator Server")
+# --- Configuration & Globals ---
 
-# Global simulator instance
-simulator = None
-ngrok_url = None
+# Load environment variables from a .env file if it exists
+load_dotenv()
 
-def start_ngrok():
-    """Start ngrok tunnel and return the public URL"""
-    global ngrok_url
-    try:
-        # Kill any existing ngrok processes
-        subprocess.run(["pkill", "-f", "ngrok"], capture_output=True)
-        time.sleep(2)
-        
-        # Start ngrok tunnel
-        process = subprocess.Popen(
-            ["ngrok", "http", "8000"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+# Instantiate the FastAPI app
+app = FastAPI(
+    title="StreetView Simulator Server",
+    description="A server to remotely control a Playwright-based StreetView simulator.",
+    version="1.0.0"
+)
+
+# Global variable to hold our simulator instance
+simulator_instance: Simulator = None
+
+# Fetch the password from environment variables
+SECRET_PASSWORD = "6Lw9;Q8BUSAnOCDQKBQAOZ/qsBR."
+if not SECRET_PASSWORD:
+    raise ValueError("FATAL: SIMULATOR_PASSWORD environment variable not set.")
+
+# --- Pydantic Models for Request Bodies ---
+
+class SetupRequest(BaseModel):
+    pages: List[str] = Field(..., example=[
+        "https://www.google.com/maps/@-36.8485,174.7633,3a,75y,90h,90t/data=..."
+    ])
+    password: str
+
+class PasswordRequest(BaseModel):
+    password: str
+
+# --- Helper Functions ---
+
+def check_password(provided_password: str):
+    """Raises an HTTPException if the password is incorrect."""
+    if provided_password != SECRET_PASSWORD:
+        raise HTTPException(status_code=403, detail="Invalid password.")
+
+async def get_simulator() -> Simulator:
+    """Returns the current simulator instance, raising an error if it's not set up."""
+    if simulator_instance is None:
+        raise HTTPException(
+            status_code=409, 
+            detail="Simulator not initialized. Please call /setup_sim/ first."
         )
-        
-        # Wait for ngrok to start
-        time.sleep(3)
-        
-        # Get the public URL from ngrok API
-        response = requests.get("http://127.0.0.1:4040/api/tunnels")
-        tunnels = response.json()["tunnels"]
-        
-        for tunnel in tunnels:
-            if tunnel["proto"] == "https":
-                ngrok_url = tunnel["public_url"]
-                print(f"🚀 Ngrok tunnel active: {ngrok_url}")
-                return ngrok_url
-                
-        raise Exception("No HTTPS tunnel found")
-        
-    except Exception as e:
-        print(f"❌ Failed to start ngrok: {e}")
-        print("Make sure ngrok is installed: https://ngrok.com/download")
-        return None
+    return simulator_instance
 
-@app.on_event("startup")
-async def startup_event():
-    global simulator, ngrok_url
-    
-    print("🔧 Starting simulator...")
-    simulator = OriginalSimulator()
-    await simulator.setup()
-    print("✅ Simulator ready")
-    
-    # Start ngrok in a separate thread
-    def ngrok_thread():
-        start_ngrok()
-    
-    threading.Thread(target=ngrok_thread, daemon=True).start()
+# --- API Endpoints ---
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    global simulator
-    if simulator:
-        await simulator.close()
-        print("🛑 Simulator closed")
+@app.post("/setup_sim/", status_code=200)
+async def setup_sim_endpoint(request: SetupRequest):
+    """
+    Initializes or re-initializes the simulator with a new set of pages.
+    This must be called before any other endpoint.
+    """
+    print("\nReceived request for /setup_sim/")
+    global simulator_instance
+    check_password(request.password)
+    
+    initial_pages = request.pages
 
-@app.get("/")
-async def root():
-    return {
-        "message": "Street View Simulator Server",
-        "ngrok_url": ngrok_url,
-        "endpoints": {
-            "screenshots": "/screenshots",
-            "move": "/move",
-            "status": "/status"
-        }
-    }
+    print(f"Setting up a new simulator with {len(request.pages)} pages...")
+    simulator_instance = Simulator(initial_pages)
+    await simulator_instance.setup()
+    
+    return {"message": f"Simulator initialized successfully with {len(request.pages)} pages."}
 
-@app.get("/status")
-async def status():
-    global simulator, ngrok_url
-    return {
-        "simulator_ready": simulator is not None,
-        "ngrok_url": ngrok_url,
-        "tabs": len(simulator.tabs) if simulator else 0
-    }
+@app.post("/get_images/")
+async def get_images_endpoint(request: PasswordRequest):
+    """
+    Takes a screenshot from each browser tab and returns them as a tensor.
+    """
+    print("\nReceived request for /get_images/")
+    check_password(request.password)
+    sim = await get_simulator()
+    
+    print("Capturing images...")
+    images_tensor = await sim.get_images()
+    # Convert tensor to a list for JSON serialization
+    images_list = images_tensor.cpu().numpy().tolist()
+    
+    print("Sending image data as response.")
+    return JSONResponse(content=images_list)
 
-@app.get("/screenshots")
-async def get_screenshots():
-    """Get screenshots from all tabs as base64 encoded images"""
-    global simulator
-    
-    if not simulator:
-        raise HTTPException(status_code=503, detail="Simulator not ready")
-    
-    try:
-        # Get images tensor [page_num, 3, h, w]
-        images_tensor = await simulator.get_images()
-        
-        # Convert tensor to base64 encoded images
-        images_b64 = []
-        for i in range(images_tensor.shape[0]):
-            # Convert tensor to PIL Image
-            tensor_img = images_tensor[i]  # [3, h, w]
-            pil_img = Image.fromarray((tensor_img.permute(1, 2, 0) * 255).numpy().astype('uint8'))
-            
-            # Convert to base64
-            buffer = io.BytesIO()
-            pil_img.save(buffer, format='PNG')
-            img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            images_b64.append(img_b64)
-        
-        return {
-            "images": images_b64,
-            "shape": list(images_tensor.shape)
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Screenshot failed: {str(e)}")
+@app.post("/move/")
+async def move_endpoint(request: PasswordRequest):
+    """
+    Performs a random move (pan or translate) in each browser tab.
+    """
+    print("\nReceived request for /move/")
+    check_password(request.password)
+    sim = await get_simulator()
 
-@app.post("/move")
-async def move_tabs():
-    """Simulate movement on all tabs"""
-    global simulator
+    print("Performing moves...")
+    movement_tensor = await sim.move()
+    # Convert tensor to a list for JSON serialization
+    movement_list = movement_tensor.cpu().numpy().tolist()
     
-    if not simulator:
-        raise HTTPException(status_code=503, detail="Simulator not ready")
-    
-    try:
-        # Get movement tensor [page_num, 6]
-        movement_tensor = await simulator.move()
-        
-        return {
-            "movements": movement_tensor.tolist(),
-            "shape": list(movement_tensor.shape)
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Movement failed: {str(e)}")
+    print("Sending movement data as response.")
+    return JSONResponse(content=movement_list)
 
-def main():
-    print("🚀 Starting Street View Simulator Server...")
-    print("📋 Make sure you have:")
-    print("   1. ngrok installed (https://ngrok.com/download)")
-    print("   2. Your config.py file configured")
-    print("   3. All dependencies installed")
-    print()
-    
-    # Run the server
-    uvicorn.run(
-        "local_server:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=False,
-        access_log=True
-    )
+# --- Server Startup ---
 
 if __name__ == "__main__":
-    main()
+    port = 8000
+    
+    print("Starting ngrok tunnel...")
+    # Start ngrok tunnel
+    public_url = ngrok.connect(port)
+    print("--- Your Remote Simulator is Live! ---")
+    print(f"Public Ngrok URL: {public_url}")
+    print("Use this URL and your password in the remote_simulator.py file.")
+    print("---------------------------------------")
+
+    # Start the FastAPI server
+    print(f"Starting FastAPI server on http://0.0.0.0:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
