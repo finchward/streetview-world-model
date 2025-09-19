@@ -1,25 +1,13 @@
-
-
 from config import Config
-if Config.is_remote:
-    import matplotlib
-    matplotlib.use('Agg')
+import matplotlib
+matplotlib.use('Agg') # Set the non-interactive 'Agg' backend
 import matplotlib.pyplot as plt
-
 import numpy as np
 from pathlib import Path
 
-if Config.is_colab:
-    from IPython.display import display, clear_output
-    from google.colab import drive
-    drive.mount('/content/drive')
 
 class Grapher:
     def __init__(self):
-        if Config.is_colab:
-            plt.ioff()
-        else:
-            plt.ion()
         self.fig, (self.ax1, self.ax2) = plt.subplots(1, 2, figsize=(11, 5))
        
         # Data storage for graph 1
@@ -28,7 +16,6 @@ class Grapher:
         self.val_x_1 = []
         self.val_y_1 = []
 
-        
         # Data storage for graph 2
         self.train_x_2 = []
         self.train_y_2 = []
@@ -43,8 +30,8 @@ class Grapher:
         self.train_line_2, = self.ax2.plot([], [], 'r-', label='Training', linewidth=1)
         self.val_line_2, = self.ax2.plot([], [], 'b-', label='Validation')
         
-        self.ax1.set_yscale("log")
-        self.ax2.set_yscale("log")
+        # self.ax1.set_yscale("log")
+        # self.ax2.set_yscale("log")
      
         self.ax1.legend()
         self.ax2.legend()
@@ -77,22 +64,10 @@ class Grapher:
             self.ax2.relim()
             self.ax2.autoscale_view()
 
-        if Config.is_remote:
-            if Config.is_colab:
-                current_dir = Path.cwd()
-            else:   
-                current_dir = Path(Config.drive_dir)
-            graph_dir = current_dir / Path(Config.graph_dir) / Config.model_name
-            graph_dir.mkdir(parents=True, exist_ok=True)
+        # Logic for saving the graph
+        graph_dir = Path.cwd() / Path(Config.graph_dir) / Config.model_name
+        graph_dir.mkdir(parents=True, exist_ok=True)
 
-            save_path = graph_dir / "graph.png"
-            self.fig.savefig(save_path, bbox_inches='tight')
-            print(f'Graph saved to {save_path}')
-        
-        if Config.is_colab:
-            clear_output(wait=True)
-            plt.tight_layout()
-            display(self.fig)
-        else:
-            plt.draw()
-            plt.pause(0.001)
+        save_path = graph_dir / "graph.png"
+        self.fig.savefig(save_path, bbox_inches='tight')
+        print(f'Graph saved to {save_path}')

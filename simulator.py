@@ -113,18 +113,7 @@ class Simulator():
         self.playwright = await async_playwright().start()
         
         print("Launching browser...")
-        if Config.is_colab:
-            self.browser = await self.playwright.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--use-gl=swiftshader",
-                    "--disable-software-rasterizer",
-                ]
-            )
-        else:
-            self.browser = await self.playwright.chromium.launch(headless=True) # for colab
+        self.browser = await self.playwright.chromium.launch(headless=True)
         
         print("Creating new browser context...")
         self.context = await self.browser.new_context()

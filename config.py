@@ -7,19 +7,18 @@ class Config:
     loaded_model = "v2"
     loaded_checkpoint = "abc"
     
-    is_colab = False
     is_tpu = False
     drive_dir = '/content/drive/ml/streetview'
 
-    is_remote = True
     graph_dir = 'graphs'
-    is_multi_gpu = True
+    is_multi_gpu = False
+
+    effective_batch_size = 256
 
     sample_every_x_batches = 98 #avoid being divisible by latent_persistence_turns
     inference_samples = 300
     inference_step_size = 1
     img_dir = 'images'
-    inference_display_update_freq = 20
 
     model_resolution = (384, 512)
     features = [64, 128, 256, 512, 1024] 
@@ -29,6 +28,8 @@ class Config:
     latent_persistence_turns = 6
     predictions_per_image = 1
 
+    bottleneck_heads = 8
+    squeeze_factor = 16
     group_size = 32
     time_embedding_dim = 512 #Must be even
     movement_embedding_dim = 512
@@ -56,7 +57,7 @@ class Config:
     learning_rate = 4e-5
     weight_decay = 0.001
 
-    graph_update_freq = 10
+    graph_update_freq = 5
     recent_losses_shown = 1500
     loss_bucket_size = 10
     save_freq = 100
