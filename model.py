@@ -131,13 +131,13 @@ class Dynamics(nn.Module):
         self.down = nn.Sequential(*layers)
 
         self.project_img = nn.Linear(features[-1], Config.latent_dimension)
-        self.predict = nn.Linear(Config.latent_dimension*2, Config.latent_dimension)
+
+        self.predict = AttentionGate(Config.latent_dimension, Config.latent_dimension, Config.latent_dimension/2)
 
     def forward(self, img, prev_state):
         latent_img = self.down(img).squeeze(-1).squeeze(-1)
         latent_img = self.project_img(latent_img)
-        state = torch.cat((latent_img, prev_state), dim=1)
-        new_state = self.predict(state)
+        new_state = self.predict(prev_state, latent_img)
         return new_state
 
 def get_2d_sin_cos_positional_encoding(H, W, C, device):
@@ -148,7 +148,7 @@ def get_2d_sin_cos_positional_encoding(H, W, C, device):
 
     # Y-axis
     y_pos = torch.arange(H, dtype=torch.float32, device=device).unsqueeze(1)  # [H, 1]
-    div_term = torch.exp(torch.arange(0, c_quarter, 2, dtype=torch.float32, device=device) * -(math.log(10000.0) / c_quarter))
+    div_term = torch.exp(torch.arange(0, c_half, 2, dtype=torch.float32, device=device) * -(math.log(10000.0) / c_half))
     pe_y = torch.zeros(H, c_half, device=device)  # [H, C/2]
     pe_y[:, 0::2] = torch.sin(y_pos * div_term)
     pe_y[:, 1::2] = torch.cos(y_pos * div_term)
@@ -178,6 +178,7 @@ class UNet(nn.Module):
         
         self.bottleneck = ResBlock(features[-1], features[-1]*2)
         self.self_attn = SelfAttention(features[-1]*2, Config.bottleneck_heads)
+        self.self_attn2 = SelfAttention(features[-1]*2, Config.bottleneck_heads)
         
         self.ups = nn.ModuleList()
         self.up_attns = nn.ModuleList()
@@ -190,7 +191,11 @@ class UNet(nn.Module):
 
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
 
-        self.embed_movement = nn.Linear(6, Config.movement_embedding_dim)
+        self.embed_movement = nn.Sequential(
+            nn.Linear(6, Config.movement_embedding_dim),
+            nn.ReLU(),
+            nn.Linear(Config.movement_embedding_dim, Config.movement_embedding_dim)
+        )
 
         
     def forward(self, x, t, m, l_emb):
@@ -214,13 +219,14 @@ class UNet(nn.Module):
             skip_connections.append(x)
             x = stride(x)
         
-        x = self.bottleneck(x, conditioning_emb) 
+        x = self.bottleneck(x, conditioning_emb)
         pos_enc = get_2d_sin_cos_positional_encoding(x.shape[2], x.shape[3], x.shape[1], x.device)
         x = x + pos_enc
         dim = x.shape
         x_flattened = x.view(dim[0], dim[1], -1)
-        x_flattened = x.transpose(1, 2) #[b, s, c]
+        x_flattened = x_flattened.transpose(1, 2) #[b, s, c]
         x_flattened = self.self_attn(x_flattened)
+        x_flattened = self.self_attn2(x_flattened)
         x_flattened = x_flattened.transpose(1, 2)
         x = x_flattened.view(dim[0], dim[1], dim[2], dim[3])        
 

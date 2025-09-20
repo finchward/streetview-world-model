@@ -8,7 +8,8 @@ import tqdm
 from grapher import Grapher
 from inference import sample_next_img
 from config import Config
-
+import math
+from torchvision import transforms
 
 if Config.is_tpu:
     import torch_xla.core.xla_model as xm
@@ -22,7 +23,7 @@ class Trainer:
         self.model = model.to(self.device)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
-        self.loss_fn = nn.MSELoss()
+        self.loss_fn = nn.HuberLoss(delta=Config.huber_delta)
 
         self.batch_count = 0
         self.batch_losses = []
@@ -43,7 +44,7 @@ class Trainer:
 
     def load_checkpoint(self):
         checkpoint_path = Path.cwd() / 'checkpoints' / Config.load_model / Config.loaded_checkpoint
-        checkpoint = torch.load(checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.batch_count = checkpoint['batch_count']
@@ -84,13 +85,15 @@ class Trainer:
         self.optimizer.zero_grad()
         accumulated_batches = 0
 
-        pbar = tqdm.tqdm(range(Config.max_batches), desc=f'Batch {self.batch_count}/{Config.max_batches}')
+        pbar = tqdm.tqdm(range(Config.max_batches), desc=f'Training')
         for idx in pbar:            
             # latent_state = self.model.predict_dynamics(prev_img, latent_state) #here we are encoding the same image we are using to predict next frame.
             #it might be useful to encode the state of the frame we are using to predict, but maybe redundant.
             #try changing latent state to here during training and see what happens
             movement = (await self.simulator.move()).to(self.device).float() #[num_pages, 6]
             next_img = (await self.simulator.get_images()).to(self.device).float() #[num_pages, 3, w, h]
+            random_erasing = transforms.RandomErasing(p=Config.erasing_p, scale=Config.erasing_scale, ratio=Config.erasing_ratio, value=Config.erasing_value)
+            prev_img = torch.stack([random_erasing(img) for img in prev_img.size(0)])
             v_target = next_img - prev_img # [n, 3, w, h]
 
             total_loss = 0
@@ -115,7 +118,7 @@ class Trainer:
             if (idx + 1) % Config.latent_persistence_turns == 0:
                 #Reset latent.
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
-                unrolled_loss /= torch.ceil(Config.effective_batch_size / num_samples)
+                unrolled_loss /= math.ceil(Config.effective_batch_size / num_samples)
                 print("Backpropagating.")
                 unrolled_loss.backward()
                 accumulated_batches += num_samples
@@ -125,7 +128,10 @@ class Trainer:
                     self.optimizer.zero_grad()
                     accumulated_batches = 0
                 unrolled_loss = 0
-                latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)               
+                if (idx + 1) % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
+                    latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device) 
+                else:
+                    latent_state = latent_state.detach() + 0.02 * torch.randn_like(latent_state)               
             if idx % Config.save_freq == 0:
                 self.save_checkpoint('main')
 
