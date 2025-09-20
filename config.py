@@ -9,7 +9,7 @@ class Config:
     
     #image occlusion
     erasing_p = 0.5
-    erasing_scale = (0.05, 0.2)
+    erasing_scale = (0.1, 0.65)
     erasing_ratio = (0.3, 3.3)
     erasing_value='random'
 
@@ -64,12 +64,12 @@ class Config:
 #         r"https://www.google.com/maps/@-38.5922817,176.8199381,3a,75y,271.3h,104.26t/data=!3m7!1e1!3m5!1s1Pt-bx9x0-vdMyd-R05xZw!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D-14.260361780245958%26panoid%3D1Pt-bx9x0-vdMyd-R05xZw%26yaw%3D271.30228279891134!7i13312!8i6656?entry=ttu&g_ep=EgoyMDI1MDkwNy4wIKXMDSoASAFQAw%3D%3D",
 #    ] # make one of these huia
 
-    learning_rate = 1e-4
+    learning_rate = 2e-4
     weight_decay = 1e-4
 
     graph_update_freq = 5
     recent_losses_shown = 1500
-    loss_bucket_size = 10
+    loss_bucket_size = 30
     save_freq = 500
 
 

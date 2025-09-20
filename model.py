@@ -104,6 +104,23 @@ class AttentionGate(nn.Module):
         k = self.k(encoder_features)
         a = self.attn(q + k)
         return a * encoder_features
+    
+class AttentionGateFlat(nn.Module):
+    def __init__(self, decoder_channels, skip_channels, hidden_channels):
+        super().__init__()
+        self.q = nn.Linear(decoder_channels, hidden_channels)
+        self.k = nn.Linear(skip_channels, hidden_channels)
+        self.attn = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(hidden_channels, 1, bias=True),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, encoder_features, decoder_features):
+        q = self.q(decoder_features)
+        k = self.k(encoder_features)
+        a = self.attn(q + k)
+        return a * encoder_features
 
 class SelfAttention(nn.Module):
     def __init__(self, in_channels, num_heads):
@@ -132,12 +149,17 @@ class Dynamics(nn.Module):
 
         self.project_img = nn.Linear(features[-1], Config.latent_dimension)
 
-        self.predict = AttentionGate(Config.latent_dimension, Config.latent_dimension, Config.latent_dimension/2)
+        self.predict =  nn.Sequential(
+            nn.Linear(Config.latent_dimension*2, Config.latent_dimension*2),
+            nn.ReLU(),
+            nn.Linear(Config.latent_dimension*2, Config.latent_dimension)
+        )
 
     def forward(self, img, prev_state):
         latent_img = self.down(img).squeeze(-1).squeeze(-1)
         latent_img = self.project_img(latent_img)
-        new_state = self.predict(prev_state, latent_img)
+        new_state = prev_state + self.predict(torch.cat((prev_state, latent_img), dim=-1)) 
+        new_state = F.normalize(new_state, dim=1, p=2)
         return new_state
 
 def get_2d_sin_cos_positional_encoding(H, W, C, device):
