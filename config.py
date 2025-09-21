@@ -69,7 +69,7 @@ class Config:
 
     graph_update_freq = 5
     recent_losses_shown = 1500
-    loss_bucket_size = 50
+    loss_bucket_size = 200
     save_freq = 500
 
 

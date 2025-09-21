@@ -85,7 +85,7 @@ class Trainer:
         self.optimizer.zero_grad()
         accumulated_batches = 0
 
-        pbar = tqdm.tqdm(range(Config.max_batches), desc=f'Training')
+        pbar = tqdm.tqdm(range(self.batch_count, Config.max_batches), initial=self.batch_count, desc=f'Training')
         for idx in pbar:            
             # latent_state = self.model.predict_dynamics(prev_img, latent_state) #here we are encoding the same image we are using to predict next frame.
             #it might be useful to encode the state of the frame we are using to predict, but maybe redundant.
