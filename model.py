@@ -105,23 +105,6 @@ class AttentionGate(nn.Module):
         a = self.attn(q + k)
         return a * encoder_features
     
-class AttentionGateFlat(nn.Module):
-    def __init__(self, decoder_channels, skip_channels, hidden_channels):
-        super().__init__()
-        self.q = nn.Linear(decoder_channels, hidden_channels)
-        self.k = nn.Linear(skip_channels, hidden_channels)
-        self.attn = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(hidden_channels, 1, bias=True),
-            nn.Sigmoid()
-        )
-    
-    def forward(self, encoder_features, decoder_features):
-        q = self.q(decoder_features)
-        k = self.k(encoder_features)
-        a = self.attn(q + k)
-        return a * encoder_features
-
 class SelfAttention(nn.Module):
     def __init__(self, in_channels, num_heads):
         super().__init__()

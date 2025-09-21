@@ -16,6 +16,8 @@ class Config:
     is_tpu = False
     drive_dir = '/content/drive/ml/streetview'
 
+    from_noise = False
+
     graph_dir = 'graphs'
     is_multi_gpu = False
 

@@ -92,20 +92,36 @@ class Trainer:
             #try changing latent state to here during training and see what happens
             movement = (await self.simulator.move()).to(self.device).float() #[num_pages, 6]
             next_img = (await self.simulator.get_images()).to(self.device).float() #[num_pages, 3, w, h]
-            random_erasing = transforms.RandomErasing(p=Config.erasing_p, scale=Config.erasing_scale, ratio=Config.erasing_ratio, value=Config.erasing_value)
-            prev_img = torch.stack([random_erasing(img) for img in torch.unbind(prev_img, dim=0)])
-            v_target = next_img - prev_img # [n, 3, w, h]
+            if Config.from_noise:
+                latent_state = self.model.predict_dynamics(prev_img, latent_state)
+                starting_noise = self.randn_like(prev_img)
+                total_loss = 0
+                for i in range(Config.predictions_per_image):
+                    time = torch.rand((num_samples), device=self.device)
+                    time_exp = time.view(num_samples, 1, 1, 1)
+                    v_target = (next_img - (1-Config.sigma_min) * starting_noise)/(1-(1-Config.sigma_min)*time_exp)
+                    pt = starting_noise + v_target * time_exp
+                    if Config.is_multi_gpu:
+                        v_pred = self.model.module.predict_delta(pt, time, movement, latent_state)
+                    else:
+                        v_pred = self.model.predict_delta(pt, time, movement, latent_state)
+                    loss = self.loss_fn(v_pred, v_target)
+                    total_loss += loss / Config.predictions_per_image
+            else:
+                random_erasing = transforms.RandomErasing(p=Config.erasing_p, scale=Config.erasing_scale, ratio=Config.erasing_ratio, value=Config.erasing_value)
+                prev_img = torch.stack([random_erasing(img) for img in torch.unbind(prev_img, dim=0)])
+                v_target = next_img - prev_img # [n, 3, w, h]
 
-            total_loss = 0
-            for i in range(Config.predictions_per_image):
-                time = torch.rand((num_samples), device=self.device)
-                pt = prev_img + v_target * time.view(num_samples, 1, 1, 1)
-                if Config.is_multi_gpu:
-                    v_pred = self.model.module.predict_delta(pt, time, movement, latent_state)
-                else:
-                    v_pred = self.model.predict_delta(pt, time, movement, latent_state)
-                loss = self.loss_fn(v_pred, v_target)
-                total_loss += loss / Config.predictions_per_image
+                total_loss = 0
+                for i in range(Config.predictions_per_image):
+                    time = torch.rand((num_samples), device=self.device)
+                    pt = prev_img + v_target * time.view(num_samples, 1, 1, 1)
+                    if Config.is_multi_gpu:
+                        v_pred = self.model.module.predict_delta(pt, time, movement, latent_state)
+                    else:
+                        v_pred = self.model.predict_delta(pt, time, movement, latent_state)
+                    loss = self.loss_fn(v_pred, v_target)
+                    total_loss += loss / Config.predictions_per_image
 
             self.batch_losses.append(total_loss.item())
             self.batch_count += 1      
@@ -139,9 +155,10 @@ class Trainer:
             if idx % Config.graph_update_freq == 0:
                 self.update_graph()
 
-            if Config.is_multi_gpu:
-                latent_state = self.model.module.predict_dynamics(prev_img, latent_state)
-            else:
-                latent_state = self.model.predict_dynamics(prev_img, latent_state)
+            if not Config.from_noise:
+                if Config.is_multi_gpu:
+                    latent_state = self.model.module.predict_dynamics(prev_img, latent_state)
+                else:
+                    latent_state = self.model.predict_dynamics(prev_img, latent_state)
             prev_img = next_img.detach().clone()
             

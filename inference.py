@@ -17,7 +17,11 @@ fig, axes, ims = None, None, None
 @torch.no_grad()
 def sample_next_img(model, device, sample_name, prev_img, movement, latent, next_img=None):
     model.eval()
-    base_img = prev_img.clone()
+
+    if Config.from_noise:
+        starting_img = torch.randn_like(prev_img)
+    else:
+        starting_img = prev_img.clone()
 
     # Determine if we are the main process
     is_main_process = (not Config.is_multi_gpu) or (dist.get_rank() == 0)
@@ -32,15 +36,15 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
         dx = Config.inference_step_size / Config.inference_samples
         
         if Config.is_multi_gpu:
-            delta = model.module.predict_delta(prev_img, time_tensor, movement, latent)
+            delta = model.module.predict_delta(starting_img, time_tensor, movement, latent)
         else:
-            delta = model.predict_delta(prev_img, time_tensor, movement, latent)
+            delta = model.predict_delta(starting_img, time_tensor, movement, latent)
         
-        prev_img += delta * dx
-        prev_img = torch.clamp(prev_img, 0, 1)
+        starting_img += delta * dx
+        starting_img = torch.clamp(starting_img, 0, 1)
 
     # Convert the final predicted image to numpy
-    out_img = prev_img.squeeze(0).detach().cpu().numpy()
+    out_img = starting_img.squeeze(0).detach().cpu().numpy()
     out_img = np.transpose(out_img, (1, 2, 0))
 
     model_dir = Path.cwd() / Config.img_dir / Config.model_name
@@ -51,7 +55,7 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
     plt.imsave(save_path_pred, np.clip(out_img, 0, 1))
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    base = np.transpose(base_img.squeeze(0).detach().cpu().numpy(), (1, 2, 0))
+    base = np.transpose(prev_img.squeeze(0).detach().cpu().numpy(), (1, 2, 0))
     target = np.transpose(next_img.squeeze(0).detach().cpu().numpy(), (1, 2, 0))
 
     for ax, img, title in zip(axes, [base, out_img, target], ['Base', 'Prediction', 'Target']):
