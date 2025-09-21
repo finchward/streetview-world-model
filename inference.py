@@ -28,7 +28,7 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
 
     # Sampling loop
     for time_step in range(Config.inference_samples):
-        time_tensor = torch.tensor([time_step]).to(device)
+        time_tensor = torch.tensor([time_step/Config.inference_samples]).to(device)
         dx = Config.inference_step_size / Config.inference_samples
         
         if Config.is_multi_gpu:

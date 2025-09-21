@@ -43,7 +43,7 @@ class Trainer:
         torch.save(checkpoint, checkpoint_path)
 
     def load_checkpoint(self):
-        checkpoint_path = Path.cwd() / 'checkpoints' / Config.load_model / Config.loaded_checkpoint
+        checkpoint_path = Path.cwd() / 'checkpoints' / Config.loaded_model / Config.loaded_checkpoint
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -80,8 +80,7 @@ class Trainer:
         print("about to get_images", flush=True)
         prev_img = (await self.simulator.get_images()).to(self.device).float()
         num_samples = len(Config.initial_pages)
-        latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)
-        latent_state = F.normalize(latent_state, dim=1, p=2)
+        latent_state = torch.zeros((num_samples, Config.latent_dimension), device=self.device)
         unrolled_loss = 0
         self.optimizer.zero_grad()
         accumulated_batches = 0
@@ -130,10 +129,9 @@ class Trainer:
                     accumulated_batches = 0
                 unrolled_loss = 0
                 if (idx + 1) % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
-                    latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device) 
-                    latent_state = F.normalize(latent_state, dim=1, p=2)
+                    latent_state = torch.zeros_like(latent_state, device=self.device) 
                 else:
-                    latent_state = latent_state.detach() + 0.02 * torch.randn_like(latent_state)               
+                    latent_state = latent_state.detach()      
             if idx % Config.save_freq == 0:
                 self.save_checkpoint('main')
 
