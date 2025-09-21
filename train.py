@@ -43,7 +43,7 @@ class Trainer:
         torch.save(checkpoint, checkpoint_path)
 
     def load_checkpoint(self):
-        checkpoint_path = Path.cwd() / 'checkpoints' / Config.load_model / Config.loaded_checkpoint
+        checkpoint_path = Path.cwd() / 'checkpoints' / Config.loaded_model / Config.loaded_checkpoint
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -80,27 +80,32 @@ class Trainer:
         print("about to get_images", flush=True)
         prev_img = (await self.simulator.get_images()).to(self.device).float()
         num_samples = len(Config.initial_pages)
-        latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device)
-        latent_state = F.normalize(latent_state, dim=1, p=2)
+        latent_state = torch.zeros((num_samples, Config.latent_dimension), device=self.device)
+        # latent_state = F.normalize(latent_state, dim=1, p=2)
         unrolled_loss = 0
         self.optimizer.zero_grad()
         accumulated_batches = 0
 
         pbar = tqdm.tqdm(range(Config.max_batches), desc=f'Training')
-        for idx in pbar:            
+        for idx in pbar:   
+            latent_state = self.model.predict_dynamics(prev_img, latent_state)
+            starting_noise = torch.randn_like(prev_img)         
             # latent_state = self.model.predict_dynamics(prev_img, latent_state) #here we are encoding the same image we are using to predict next frame.
             #it might be useful to encode the state of the frame we are using to predict, but maybe redundant.
             #try changing latent state to here during training and see what happens
             movement = (await self.simulator.move()).to(self.device).float() #[num_pages, 6]
             next_img = (await self.simulator.get_images()).to(self.device).float() #[num_pages, 3, w, h]
-            random_erasing = transforms.RandomErasing(p=Config.erasing_p, scale=Config.erasing_scale, ratio=Config.erasing_ratio, value=Config.erasing_value)
-            prev_img = torch.stack([random_erasing(img) for img in torch.unbind(prev_img, dim=0)])
-            v_target = next_img - prev_img # [n, 3, w, h]
+            #random_erasing = transforms.RandomErasing(p=Config.erasing_p, scale=Config.erasing_scale, ratio=Config.erasing_ratio, value=Config.erasing_value)
+           # prev_img = torch.stack([random_erasing(img) for img in torch.unbind(prev_img, dim=0)])
+            #v_target = next_img - starting_noise # [n, 3, w, h]
 
+            
             total_loss = 0
             for i in range(Config.predictions_per_image):
                 time = torch.rand((num_samples), device=self.device)
-                pt = prev_img + v_target * time.view(num_samples, 1, 1, 1)
+                time_exp = time.view(num_samples, 1, 1, 1)
+                v_target = (next_img - (1-Config.sigma_min) * starting_noise)/(1-(1-Config.sigma_min)*time_exp)
+                pt = starting_noise + v_target * time_exp
                 if Config.is_multi_gpu:
                     v_pred = self.model.module.predict_delta(pt, time, movement, latent_state)
                 else:
@@ -130,10 +135,9 @@ class Trainer:
                     accumulated_batches = 0
                 unrolled_loss = 0
                 if (idx + 1) % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
-                    latent_state = torch.randn((num_samples, Config.latent_dimension), device=self.device) 
-                    latent_state = F.normalize(latent_state, dim=1, p=2)
+                    latent_state = torch.zeros_like(latent_state) 
                 else:
-                    latent_state = latent_state.detach() + 0.02 * torch.randn_like(latent_state)               
+                    latent_state = latent_state.detach()   
             if idx % Config.save_freq == 0:
                 self.save_checkpoint('main')
 
@@ -141,9 +145,9 @@ class Trainer:
             if idx % Config.graph_update_freq == 0:
                 self.update_graph()
 
-            if Config.is_multi_gpu:
-                latent_state = self.model.module.predict_dynamics(prev_img, latent_state)
-            else:
-                latent_state = self.model.predict_dynamics(prev_img, latent_state)
+            # if Config.is_multi_gpu:
+            #     latent_state = self.model.module.predict_dynamics(prev_img, latent_state)
+            # else:
+            #     latent_state = self.model.predict_dynamics(prev_img, latent_state)
             prev_img = next_img.detach().clone()
             

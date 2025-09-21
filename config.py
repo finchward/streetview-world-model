@@ -2,10 +2,10 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    model_name = "v2"
-    load_model = False
-    loaded_model = "v2"
-    loaded_checkpoint = "abc"
+    model_name = "v3"
+    load_model = True
+    loaded_model = "v3"
+    loaded_checkpoint = "main"
     
     #image occlusion
     erasing_p = 0.5
@@ -31,18 +31,19 @@ class Config:
     #64 -> 128 -> 256 -> 512 -> 1024/16 ->| 2048/16 |  -> 1024/32 append 2048/32 -> 1024/32 -> 512/64 -> 256/128 -> 128/256 -> 64/512
     #256 -> 128 -> 64 -> 32 -> 16 |  192 -> 96 -> 48 -> 24 -> 12
     
-    latent_persistence_turns = 9
+    latent_persistence_turns = 8
     latent_reset_turns = 12
     predictions_per_image = 1
 
     huber_delta = 0.1
 
+    sigma_min = 0.01
     bottleneck_heads = 8
     squeeze_factor = 16 
     group_size = 32
     time_embedding_dim = 512 #Must be even
     movement_embedding_dim = 256
-    latent_dimension = 512
+    latent_dimension = 1024
     max_batches = 10_000_000
     rotation_probability = 0.6
     initial_pages = [
@@ -64,7 +65,7 @@ class Config:
 #         r"https://www.google.com/maps/@-38.5922817,176.8199381,3a,75y,271.3h,104.26t/data=!3m7!1e1!3m5!1s1Pt-bx9x0-vdMyd-R05xZw!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D-14.260361780245958%26panoid%3D1Pt-bx9x0-vdMyd-R05xZw%26yaw%3D271.30228279891134!7i13312!8i6656?entry=ttu&g_ep=EgoyMDI1MDkwNy4wIKXMDSoASAFQAw%3D%3D",
 #    ] # make one of these huia
 
-    learning_rate = 2e-4
+    learning_rate = 3e-4
     weight_decay = 1e-4
 
     graph_update_freq = 5

@@ -18,6 +18,7 @@ fig, axes, ims = None, None, None
 def sample_next_img(model, device, sample_name, prev_img, movement, latent, next_img=None):
     model.eval()
     base_img = prev_img.clone()
+    starting_noise = torch.randn_like(base_img)
 
     # Determine if we are the main process
     is_main_process = (not Config.is_multi_gpu) or (dist.get_rank() == 0)
@@ -28,19 +29,19 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
 
     # Sampling loop
     for time_step in range(Config.inference_samples):
-        time_tensor = torch.tensor([time_step]).to(device)
+        time_tensor = torch.tensor([time_step/Config.inference_samples]).to(device)
         dx = Config.inference_step_size / Config.inference_samples
         
         if Config.is_multi_gpu:
-            delta = model.module.predict_delta(prev_img, time_tensor, movement, latent)
+            delta = model.module.predict_delta(starting_noise, time_tensor, movement, latent)
         else:
-            delta = model.predict_delta(prev_img, time_tensor, movement, latent)
+            delta = model.predict_delta(starting_noise, time_tensor, movement, latent)
         
-        prev_img += delta * dx
-        prev_img = torch.clamp(prev_img, 0, 1)
+        starting_noise += delta * dx
+        starting_noise = torch.clamp(starting_noise, 0, 1)
 
     # Convert the final predicted image to numpy
-    out_img = prev_img.squeeze(0).detach().cpu().numpy()
+    out_img = starting_noise.squeeze(0).detach().cpu().numpy()
     out_img = np.transpose(out_img, (1, 2, 0))
 
     model_dir = Path.cwd() / Config.img_dir / Config.model_name
