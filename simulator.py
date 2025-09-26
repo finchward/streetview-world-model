@@ -27,8 +27,10 @@ class StreetViewTab:
         self.page = page
 
     async def take_screenshot(self):
-        print(f"  - Tab {self.id}: Capturing screenshot.")
-        screenshot_bytes = await self.page.locator('canvas.aFsglc').first.screenshot(timeout=0)
+        await self.page.locator('canvas.aFsglc').first.wait_for(state='visible', timeout=9_999_000)
+        await asyncio.sleep(2)
+        screenshot_bytes = await self.page.locator('canvas.aFsglc').first.screenshot(animations='disabled', timeout=9_999_000) # Your timeout here is very long, so it's not the cause of the `TimeoutError`
+ 
         image = Image.open(io.BytesIO(screenshot_bytes)).convert('RGB')
         transform = transforms.Compose([
             transforms.Resize(Config.model_resolution),    
@@ -44,8 +46,7 @@ class StreetViewTab:
         return tensor
 
     async def move(self):
-        print(f"  - Tab {self.id}: Waiting for canvas to be ready.")
-        await self.page.wait_for_selector('canvas.aFsglc', timeout=0)   
+        await self.page.wait_for_selector('canvas.aFsglc', timeout=9_999_999)   
         element = self.page.locator('canvas.aFsglc').first
         box = await element.bounding_box()
         if not box:
@@ -67,7 +68,6 @@ class StreetViewTab:
 
         is_rotation = random.random() < Config.rotation_probability
         if is_rotation:
-            print(f"  - Tab {self.id}: Performing rotation.")
             # Pick two valid points
             x1, y1, _, _ = await sample_point()
             x2, y2, _, _ = await sample_point()
@@ -77,7 +77,6 @@ class StreetViewTab:
             await self.page.mouse.move(x2, y2, steps=15)
             await self.page.mouse.up(button="left")
             
-            print(f"  - Tab {self.id}: Waiting for view to settle after rotation.")
             await asyncio.sleep(4)
 
             # Convert to vectors relative to box
@@ -93,12 +92,9 @@ class StreetViewTab:
             return [wq, xq, yq, zq, 0, 0]
 
         else:
-            print(f"  - Tab {self.id}: Performing forward movement.")
             x, y, rx, ry = await sample_point()
             await self.page.mouse.move(x, y)
             await self.page.mouse.click(x, y)
-
-            print(f"  - Tab {self.id}: Waiting for view to settle after move.")
             await asyncio.sleep(4)
             return [1, 0, 0, 0, rx - 0.5, ry - 0.5]
 
@@ -118,13 +114,14 @@ class Simulator():
         
         print("Creating new browser context...")
         self.context = await self.browser.new_context()
+        self.context.set_default_timeout(99_999_999)
 
         print(f"Creating {len(self.initial_pages)} new pages in browser...")
         pages = await asyncio.gather(*(self.context.new_page() for _ in self.initial_pages))
         self.tabs = [StreetViewTab(i, page) for i, page in enumerate(pages)]
         
         print("Navigating all tabs to initial pages...")
-        await asyncio.gather(*(tab.page.goto(self.initial_pages[i]) for i, tab in enumerate(self.tabs)))
+        await asyncio.gather(*(tab.page.goto(self.initial_pages[i], timeout=990_000) for i, tab in enumerate(self.tabs)))
         print("All tabs loaded successfully.")
 
 

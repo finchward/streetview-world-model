@@ -41,8 +41,8 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
             delta = model.predict_delta(starting_img, time_tensor, movement, latent)
         
         starting_img += delta * dx
-        starting_img = torch.clamp(starting_img, 0, 1)
 
+    starting_img = torch.clamp(starting_img, 0, 1)
     # Convert the final predicted image to numpy
     out_img = starting_img.squeeze(0).detach().cpu().numpy()
     out_img = np.transpose(out_img, (1, 2, 0))

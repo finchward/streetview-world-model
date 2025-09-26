@@ -90,16 +90,17 @@ class Trainer:
             # latent_state = self.model.predict_dynamics(prev_img, latent_state) #here we are encoding the same image we are using to predict next frame.
             #it might be useful to encode the state of the frame we are using to predict, but maybe redundant.
             #try changing latent state to here during training and see what happens
-            movement = (await self.simulator.move()).to(self.device).float() #[num_pages, 6]
+            await self.simulator.increment()
+            movement = (await self.simulator.get_movement()).to(self.device).float() #[num_pages, 6]
             next_img = (await self.simulator.get_images()).to(self.device).float() #[num_pages, 3, w, h]
             if Config.from_noise:
                 latent_state = self.model.predict_dynamics(prev_img, latent_state)
-                starting_noise = self.randn_like(prev_img)
+                starting_noise = torch.randn_like(prev_img)
                 total_loss = 0
                 for i in range(Config.predictions_per_image):
                     time = torch.rand((num_samples), device=self.device)
                     time_exp = time.view(num_samples, 1, 1, 1)
-                    v_target = (next_img - (1-Config.sigma_min) * starting_noise)/(1-(1-Config.sigma_min)*time_exp)
+                    v_target = (next_img - starting_noise)
                     pt = starting_noise + v_target * time_exp
                     if Config.is_multi_gpu:
                         v_pred = self.model.module.predict_delta(pt, time, movement, latent_state)
@@ -135,7 +136,6 @@ class Trainer:
                 #Reset latent.
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
                 unrolled_loss /= math.ceil(Config.effective_batch_size / num_samples)
-                print("Backpropagating.")
                 unrolled_loss.backward()
                 accumulated_batches += num_samples
                 if accumulated_batches >= Config.effective_batch_size:
