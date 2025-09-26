@@ -12,7 +12,7 @@ async def main(sim_url=None, sim_pass=None):
     if Config.is_multi_gpu:
         model = nn.DataParallel(model)  # this wraps model for multi-GPU
     #simulator = RemoteSimulator(base_url=sim_url, password=sim_pass)
-    simulator = ReplaySimulator(dataset_dir="webdataset_sharded", total_sequences=16, num_parallel_sequences=6)
+    simulator = ReplaySimulator(dataset_dir="webdataset_sharded", total_sequences=16, num_parallel_sequences=Config.batch_size)
     await simulator.setup()
     trainer = Trainer(model, simulator)
     if Config.load_model:

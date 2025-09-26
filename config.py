@@ -3,7 +3,7 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     model_name = "v8.0"
-    load_model = True
+    load_model = False
     loaded_model = "v6.1"
     loaded_checkpoint = "main"
     
@@ -31,11 +31,12 @@ class Config:
     img_dir = 'images'
 
     model_resolution = (384, 512)
-    features = [32, 64, 128, 256, 512] #we can double these though.
+    features = [64, 128, 256, 512] #we can double these though.
     #64 -> 128 -> 256 -> 512 -> 1024/16 ->| 2048/16 |  -> 1024/32 append 2048/32 -> 1024/32 -> 512/64 -> 256/128 -> 128/256 -> 64/512
     #256 -> 128 -> 64 -> 32 -> 16 |  192 -> 96 -> 48 -> 24 -> 12
     
-    latent_persistence_turns = 7
+    batch_size = 9
+    latent_persistence_turns = 5
     latent_reset_turns = 12
     predictions_per_image = 1
 
@@ -49,6 +50,7 @@ class Config:
     latent_dimension = 1024
     max_batches = 50_000_000
     rotation_probability = 0.7
+    
     initial_pages = [
         r"https://www.google.com/maps/@-38.0633252,175.5396599,3a,75y,251.25h,90t/data=!3m7!1e1!3m5!1sDoszpl71ckFRT0ZDix5UHA!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D0%26panoid%3DDoszpl71ckFRT0ZDix5UHA%26yaw%3D251.24602!7i13312!8i6656?entry=ttu&g_ep=EgoyMDI1MDkxMC4wIKXMDSoASAFQAw%3D%3D",  
         r"https://www.google.com/maps/@-38.1054899,175.5949416,3a,75y,253.91h,91.66t/data=!3m7!1e1!3m5!1sJijCcQ6jydZMzlbjnK0_7A!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D-1.6631163651967285%26panoid%3DJijCcQ6jydZMzlbjnK0_7A%26yaw%3D253.90960036050717!7i16384!8i8192?entry=ttu&g_ep=EgoyMDI1MDkxNy4wIKXMDSoASAFQAw%3D%3D",
