@@ -35,7 +35,7 @@ class Config:
     #64 -> 128 -> 256 -> 512 -> 1024/16 ->| 2048/16 |  -> 1024/32 append 2048/32 -> 1024/32 -> 512/64 -> 256/128 -> 128/256 -> 64/512
     #256 -> 128 -> 64 -> 32 -> 16 |  192 -> 96 -> 48 -> 24 -> 12
     
-    batch_size = 9
+    batch_size = 4
     latent_persistence_turns = 5
     latent_reset_turns = 12
     predictions_per_image = 1

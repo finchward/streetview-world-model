@@ -79,7 +79,7 @@ class Trainer:
         self.model.train()
         print("about to get_images", flush=True)
         prev_img = (await self.simulator.get_images()).to(self.device).float()
-        num_samples = len(Config.initial_pages)
+        num_samples = Config.batch_size
         latent_state = torch.zeros((num_samples, Config.latent_dimension), device=self.device)
         unrolled_loss = 0
         self.optimizer.zero_grad()
