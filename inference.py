@@ -1,6 +1,7 @@
 import torch
 import matplotlib
 # Set a non-interactive backend before importing pyplot
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,12 +11,12 @@ from pathlib import Path
 from config import Config
 # Distributed imports
 import torch.distributed as dist
+from model import WorldModel
 
 fig, axes, ims = None, None, None
 
-
 @torch.no_grad()
-def sample_next_img(model, device, sample_name, prev_img, movement, latent, next_img=None):
+def sample_next_img(model, device, sample_name, prev_img, latent, next_img=None):
     model.eval()
 
     if Config.from_noise:
@@ -33,12 +34,12 @@ def sample_next_img(model, device, sample_name, prev_img, movement, latent, next
     # Sampling loop
     for time_step in range(Config.inference_samples):
         time_tensor = torch.tensor([time_step/Config.inference_samples]).to(device)
-        dx = Config.inference_step_size / Config.inference_samples
+        dx = 1 / Config.inference_samples
         
         if Config.is_multi_gpu:
-            delta = model.module.predict_delta(starting_img, time_tensor, movement, latent)
+            delta = model.module.predict_delta(starting_img, time_tensor, latent)
         else:
-            delta = model.predict_delta(starting_img, time_tensor, movement, latent)
+            delta = model.predict_delta(starting_img, time_tensor, latent)
         
         starting_img += delta * dx
 

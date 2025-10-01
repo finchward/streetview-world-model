@@ -30,8 +30,8 @@ class Grapher:
         self.train_line_2, = self.ax2.plot([], [], 'r-', label='Training', linewidth=1)
         self.val_line_2, = self.ax2.plot([], [], 'b-', label='Validation')
         
-        # self.ax1.set_yscale("log")
-        # self.ax2.set_yscale("log")
+        self.ax1.set_yscale("log")
+        self.ax2.set_yscale("log")
      
         self.ax1.legend()
         self.ax2.legend()

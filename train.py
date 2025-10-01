@@ -94,7 +94,7 @@ class Trainer:
             movement = (await self.simulator.get_movement()).to(self.device).float() #[num_pages, 6]
             next_img = (await self.simulator.get_images()).to(self.device).float() #[num_pages, 3, w, h]
             if Config.from_noise:
-                latent_state = self.model.predict_dynamics(prev_img, latent_state)
+                latent_state = self.model.predict_dynamics(prev_img, movement, latent_state)
                 starting_noise = torch.randn_like(prev_img)
                 total_loss = 0
                 for i in range(Config.predictions_per_image):
@@ -103,9 +103,9 @@ class Trainer:
                     v_target = (next_img - starting_noise)
                     pt = starting_noise + v_target * time_exp
                     if Config.is_multi_gpu:
-                        v_pred = self.model.module.predict_delta(pt, time, movement, latent_state)
+                        v_pred = self.model.module.predict_delta(pt, time, latent_state)
                     else:
-                        v_pred = self.model.predict_delta(pt, time, movement, latent_state)
+                        v_pred = self.model.predict_delta(pt, time, latent_state)
                     loss = self.loss_fn(v_pred, v_target)
                     total_loss += loss / Config.predictions_per_image
             else:
@@ -130,7 +130,7 @@ class Trainer:
 
             if idx % Config.sample_every_x_batches == 0:
                 with torch.no_grad():
-                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), movement[0:1, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
 
             if (idx + 1) % Config.latent_persistence_turns == 0:
                 #Reset latent.
@@ -144,6 +144,11 @@ class Trainer:
                     self.optimizer.zero_grad()
                     accumulated_batches = 0
                 unrolled_loss = 0
+                state_base = Path.cwd() / "states" / Config.model_name
+                state_base.mkdir(parents=True, exist_ok=True)
+
+                state_path = state_base / f"idx_{(idx+1) % (Config.latent_persistence_turns * Config.latent_reset_turns)}.pt"
+                torch.save(latent_state, state_path)
                 if (idx + 1) % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
                     latent_state = torch.zeros_like(latent_state, device=self.device) 
                 else:

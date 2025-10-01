@@ -2,9 +2,9 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    model_name = "v8.0"
-    load_model = False
-    loaded_model = "v6.1"
+    model_name = "v8.5"
+    load_model = True
+    loaded_model = "v8.5"
     loaded_checkpoint = "main"
     
     #image occlusion
@@ -23,11 +23,16 @@ class Config:
     graph_dir = 'graphs'
     is_multi_gpu = False
 
+    is_interacting = False
+    interactive_model = "v8.5"
+    interactive_checkpoint = "chkp1"
+    interactive_latent = "latent1"
+    
+
     effective_batch_size = 256
 
     sample_every_x_batches = 4998 #avoid being divisible by latent_persistence_turns
     inference_samples = 300
-    inference_step_size = 1
     img_dir = 'images'
 
     model_resolution = (384, 512)
@@ -37,7 +42,7 @@ class Config:
     
     batch_size = 4
     latent_persistence_turns = 5
-    latent_reset_turns = 12
+    latent_reset_turns = 10
     predictions_per_image = 1
 
     huber_delta = 0.1
@@ -47,7 +52,7 @@ class Config:
     group_size = 32
     time_embedding_dim = 512 #Must be even
     movement_embedding_dim = 256
-    latent_dimension = 1024
+    latent_dimension = 2048
     max_batches = 50_000_000
     rotation_probability = 0.7
     

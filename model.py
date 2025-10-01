@@ -16,9 +16,7 @@ class ResBlock(nn.Module):
 
         self.is_conditioned = is_conditioned
         if is_conditioned:
-            self.condition = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension + Config.time_embedding_dim, out_channels*2)
-        #self.memory_conditioning = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension, out_channels)
-        #self.time_conditioning = nn.Linear(Config.time_embedding_dim, out_channels)
+            self.condition = nn.Linear(Config.latent_dimension, out_channels*2)
         self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
         self.is_squeezing = squeeze_factor != None
         if squeeze_factor:
@@ -57,7 +55,7 @@ class ConvBlock(nn.Module):
         self.bn2 = nn.GroupNorm(num_groups=Config.group_size,  num_channels=out_channels)
         self.relu = nn.LeakyReLU(inplace=True)
 
-        self.condition = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension + Config.time_embedding_dim, out_channels*2)
+        self.condition = nn.Linear(Config.latent_dimension, out_channels*2)
 
         self.is_squeezing = squeeze_factor != None
         if squeeze_factor:
@@ -69,9 +67,6 @@ class ConvBlock(nn.Module):
                 nn.Sigmoid()
             )
 
-        #self.memory_conditioning = nn.Linear(Config.movement_embedding_dim + Config.latent_dimension, out_channels)
-        #self.time_conditioning = nn.Linear(Config.time_embedding_dim, out_channels)
-    
     def forward(self, x, conditioning):
         fx = self.relu(self.bn1(self.conv1(x))) # test no batchnorm
         fx = self.bn2(self.conv2(fx))
@@ -133,15 +128,24 @@ class Dynamics(nn.Module):
         self.project_img = nn.Linear(features[-1], Config.latent_dimension)
 
         self.predict =  nn.Sequential(
-            nn.Linear(Config.latent_dimension*2, Config.latent_dimension*2),
+            nn.Linear(Config.latent_dimension*2 + Config.movement_embedding_dim, Config.latent_dimension),
             nn.ReLU(),
-            nn.Linear(Config.latent_dimension*2, Config.latent_dimension)
+            nn.Linear(Config.latent_dimension, Config.latent_dimension),
+            nn.ReLU(),
+            nn.Linear(Config.latent_dimension, Config.latent_dimension)
         )
 
-    def forward(self, img, prev_state):
+        self.embed_movement = nn.Sequential(
+            nn.Linear(6, Config.movement_embedding_dim//2),
+            nn.ReLU(),
+            nn.Linear(Config.movement_embedding_dim//2, Config.movement_embedding_dim)
+        )
+
+    def forward(self, img, movement, prev_state):
         latent_img = self.down(img).squeeze(-1).squeeze(-1)
         latent_img = self.project_img(latent_img)
-        new_state = prev_state + self.predict(torch.cat((prev_state, latent_img), dim=-1)) 
+        movement_emb = self.embed_movement(movement)
+        new_state = prev_state + self.predict(torch.cat((prev_state, latent_img, movement_emb), dim=-1)) 
         new_state = F.normalize(new_state, dim=1, p=2)
         return new_state
 
@@ -196,14 +200,15 @@ class UNet(nn.Module):
 
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
 
-        self.embed_movement = nn.Sequential(
-            nn.Linear(6, Config.movement_embedding_dim),
+        total_dim = Config.latent_dimension + Config.time_embedding_dim
+        self.merge_conditioning = nn.Sequential(
+            nn.Linear(total_dim, total_dim),
             nn.ReLU(),
-            nn.Linear(Config.movement_embedding_dim, Config.movement_embedding_dim)
+            nn.Linear(total_dim, Config.latent_dimension)
         )
 
         
-    def forward(self, x, t, m, l_emb):
+    def forward(self, x, t, l_emb):
         skip_connections = []
 
         #Embedding time step
@@ -216,8 +221,7 @@ class UNet(nn.Module):
         angles = t * freqs  
         t_emb = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
 
-        m_emb = self.embed_movement(m)
-        conditioning_emb = torch.cat([m_emb, l_emb, t_emb], dim=1)
+        conditioning_emb = self.merge_conditioning(torch.cat([l_emb, t_emb], dim=1))
 
         for down, stride in zip(self.downs, self.strides):
             x = down(x, conditioning_emb)
@@ -256,11 +260,11 @@ class WorldModel(nn.Module):
         self.backbone = UNet()
         self.dynamics = Dynamics()
     
-    def predict_delta(self, x, t, m, l_emb):
-        return self.backbone(x, t, m, l_emb)
+    def predict_delta(self, x, t, l_emb):
+        return self.backbone(x, t, l_emb)
 
-    def predict_dynamics(self, img, prev_state):
-        return self.dynamics(img, prev_state)
+    def predict_dynamics(self, img, movement, prev_state):
+        return self.dynamics(img, movement,prev_state)
 
 
 def get_model():
