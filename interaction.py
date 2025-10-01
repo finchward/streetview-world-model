@@ -9,9 +9,7 @@ from config import Config
 # Distributed imports
 import torch.distributed as dist
 from model import WorldModel
-
 import math
-
 
 def convert_to_vector(x, y, w, h):
     nx = (2.0 * x - w) / w
@@ -24,7 +22,6 @@ def convert_to_vector(x, y, w, h):
     else:
         z = np.sqrt(1.0 - length2)
         return np.array([nx, ny, z])
-
 
 @torch.no_grad()
 def interact():
@@ -134,3 +131,7 @@ def interact():
     fig.canvas.mpl_connect("button_release_event", on_release)
 
     plt.show(block=True)
+
+
+if __name__ == "__main__":
+    interact()

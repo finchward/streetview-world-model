@@ -23,7 +23,7 @@ class Config:
     graph_dir = 'graphs'
     is_multi_gpu = False
 
-    is_interacting = False
+    is_interacting = True
     interactive_model = "v8.5"
     interactive_checkpoint = "chkp1"
     interactive_latent = "idx_35"
