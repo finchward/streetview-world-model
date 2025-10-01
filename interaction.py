@@ -35,8 +35,6 @@ def interact():
         out_img = np.transpose(out_img, (1, 2, 0))
         return out_img
     
-    
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     latent = torch.load(
         Path.cwd() / "states" / Config.interactive_model / Config.interactive_latent, 
@@ -58,21 +56,25 @@ def interact():
         im.set_data(torch_to_image(tensor))
         fig.canvas.draw_idle()
         fig.canvas.flush_events()
-
-    for time_step in range(Config.inference_samples):
-        time_tensor = torch.tensor([time_step/Config.inference_samples], device=device)
-        dx = 1/Config.inference_samples
-        delta = model.predict_delta(out_image, time_tensor, latent)
-        out_image += delta * dx
-        update_display(out_image)
-    #preparing an initial image for interaction with. 
+    
+    def update_image():
+        nonlocal out_image
+        for time_step in range(Config.inference_samples):
+            time_tensor = torch.tensor([time_step/Config.inference_samples], device=device)
+            dx = 1/Config.inference_samples
+            delta = model.predict_delta(out_image, time_tensor, latent)
+            out_image += delta * dx
+            update_display(out_image)
+        print("New image predicted")
 
     def sample(movement):
-
+        nonlocal latent
+        latent = model.predict_dynamics(out_image, movement, latent)
+        print("New latent predicted")
+        update_image()
         
 
-
-    click_coords = []
+    update_image()
 
     start = None
     end = None
@@ -111,7 +113,8 @@ def interact():
     def on_click(coords):
         rx = coords.xdata / width
         ry = coords.ydata / height
-        movement = torch.Tensor([1, 0, 0, 0, rx - 0.5, ry - 0.5])
+        movement = torch.Tensor([1, 0, 0, 0, rx - 0.5, ry - 0.5], device=device)
+        sample(movement)
 
     def on_drag(start, end):
         v1 = convert_to_vector(start.xdata, start.ydata, width, height)
@@ -124,12 +127,10 @@ def interact():
         s = np.sin(theta / 2.0)
         xq, yq, zq = axis * s
         movement = torch.Tensor([wq, xq, yq, zq, 0, 0], device=device)
-
+        sample(movement)
 
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
     fig.canvas.mpl_connect("button_release_event", on_release)
 
-
-    while True:
-       
+    plt.show(block=True)

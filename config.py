@@ -26,7 +26,7 @@ class Config:
     is_interacting = False
     interactive_model = "v8.5"
     interactive_checkpoint = "chkp1"
-    interactive_latent = "latent1"
+    interactive_latent = "idx_35"
     
 
     effective_batch_size = 256
