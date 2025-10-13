@@ -10,6 +10,7 @@ from config import Config
 import torch.distributed as dist
 from model import WorldModel
 import math
+from torchdiffeq import odeint
 
 def convert_to_vector(x, y, w, h):
     nx = (2.0 * x - w) / w
@@ -33,18 +34,28 @@ def interact():
         return out_img
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    latent = torch.load(
-        Path.cwd() / "states" / Config.interactive_model / Config.interactive_latent, 
-        map_location=device
-    ) # allow noise start too
+    if Config.is_latent_init_zeros:
+        latent = torch.zeros((1, Config.latent_dimension), device=device)
+    elif Config.is_latent_init_noise:
+        latent = torch.randn((1, Config.latent_dimension), device=device)
+    else:
+        latent = torch.load(
+            Path.cwd() / "states" / Config.interactive_model / Config.interactive_latent, 
+            map_location=device
+        )[0:1, :]
     checkpoint = torch.load(
         Path.cwd() / "checkpoints" / Config.interactive_model / Config.interactive_checkpoint, 
         map_location=device
     )
     model = WorldModel()
     model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    model.eval()
 
-    out_image = torch.randn(Config.model_resolution, device=device)
+    height = Config.model_resolution[0]
+    width = Config.model_resolution[1]
+
+    out_image = torch.randn((1, 3, height, width), device=device)
     fig, ax = plt.subplots()
     im = ax.imshow(torch_to_image(out_image))
     plt.ion()
@@ -53,15 +64,43 @@ def interact():
         im.set_data(torch_to_image(tensor))
         fig.canvas.draw_idle()
         fig.canvas.flush_events()
-    
+
+
+    class ODEFunc(torch.nn.Module):
+        def __init__(self, model, latent):
+            super().__init__()
+            self.model = model
+            self.latent = latent
+
+        def forward(self, t, x):
+            time_tensor = torch.ones(x.shape[0], device=x.device) * t
+            with torch.no_grad():
+                zeros = torch.zeros_like(self.latent)
+                delta_uncond = self.model.predict_delta(x, time_tensor, zeros)
+                delta_cond = self.model.predict_delta(x, time_tensor, self.latent)
+                delta_net = delta_uncond + 3 * (delta_cond - delta_uncond)
+                
+            return delta_net
+
     def update_image():
         nonlocal out_image
-        for time_step in range(Config.inference_samples):
-            time_tensor = torch.tensor([time_step/Config.inference_samples], device=device)
-            dx = 1/Config.inference_samples
-            delta = model.predict_delta(out_image, time_tensor, latent)
-            out_image += delta * dx
-            update_display(out_image)
+        model.eval()
+        ode_func = ODEFunc(model, latent)
+        x0 = torch.randn((1, 3, height, width), device=device)
+        t_span = torch.tensor([0.0, 1.0], device=device)
+
+        with torch.no_grad():
+            solution = odeint(
+                ode_func, 
+                x0, 
+                t_span, 
+                method='dopri5', # A good adaptive solver (RK45)
+                rtol=1e-4,       # Relative tolerance
+                atol=1e-4        # Absolute tolerance
+            )
+        out_image = solution[-1]
+        
+        update_display(out_image)
         print("New image predicted")
 
     def sample(movement):
@@ -77,26 +116,25 @@ def interact():
     end = None
     dragging = False
     threshold = 10 #pixels
-    height = Config.model_resolution[0]
-    width = Config.model_resolution[1]
+
 
     def on_press(event):
-        global start, dragging
+        nonlocal start, dragging
         if event.inaxes:
             start = (event.xdata, event.ydata)
             dragging = False
 
     def on_motion(event):
-        global dragging
+        nonlocal dragging
         if start is not None and event.inaxes:
-            dx = event.x - start[0]
-            dy = event.y - start[1]
+            dx = event.xdata - start[0]
+            dy = event.ydata - start[1]
             distance = math.hypot(dx, dy)
             if distance > threshold:
                 dragging = True
 
     def on_release(event):
-        global start, dragging, end
+        nonlocal start, dragging, end
         if event.inaxes and start is not None:
             end = (event.xdata, event.ydata)
             if dragging:
@@ -108,14 +146,19 @@ def interact():
         dragging = False
 
     def on_click(coords):
-        rx = coords.xdata / width
-        ry = coords.ydata / height
-        movement = torch.Tensor([1, 0, 0, 0, rx - 0.5, ry - 0.5], device=device)
+        print("Click detected")
+        x, y = coords
+        rx = x / width
+        ry = y / height
+        movement = torch.tensor([1, 0, 0, 0, rx - 0.5, ry - 0.5], device=device, dtype=torch.float32).unsqueeze(0)
         sample(movement)
 
     def on_drag(start, end):
-        v1 = convert_to_vector(start.xdata, start.ydata, width, height)
-        v2 = convert_to_vector(end.xdata, end.ydata, width, height)
+        print("Drag detected")
+        x1, y1 = start
+        x2, y2 = end
+        v1 = convert_to_vector(x1, y1, width, height)
+        v2 = convert_to_vector(x2, y2, width, height)
         axis = np.cross(v1, v2)
         axis /= np.linalg.norm(axis)
         dot = np.clip(np.dot(v1, v2), -1.0, 1.0)
@@ -123,7 +166,7 @@ def interact():
         wq = np.cos(theta / 2.0)
         s = np.sin(theta / 2.0)
         xq, yq, zq = axis * s
-        movement = torch.Tensor([wq, xq, yq, zq, 0, 0], device=device)
+        movement = torch.tensor([wq, xq, yq, zq, 0, 0], device=device, dtype=torch.float32).unsqueeze(0)
         sample(movement)
 
     fig.canvas.mpl_connect("button_press_event", on_press)
