@@ -47,15 +47,18 @@ class Trainer:
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        checkpoint_lr = self.optimizer.param_groups[0]['lr']
+        if checkpoint_lr != Config.learning_rate:
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = Config.learning_rate
+            print(f"updated optimizer learning rate from {checkpoint_lr} to {Config.learning_rate}")
+
         self.batch_count = checkpoint['batch_count']
         self.batch_losses = checkpoint['batch_losses']
 
     def update_graph(self):
         indices = range(len(self.batch_losses))
         losses = self.batch_losses
-        recent_losses = self.batch_losses[-1*Config.recent_losses_shown:]
-        recent_losses_indices = indices[-1*Config.recent_losses_shown:]
-        self.grapher.update_line(1, "Training", recent_losses_indices, recent_losses)
 
         grouped_losses = []
         grouped_indices = []
@@ -69,10 +72,12 @@ class Trainer:
                 count = 0
             sum += loss
             count += 1
-        grouped_losses.append(sum/count)
-        grouped_indices.append(indices[-1])
             
         self.grapher.update_line(0, "Training", grouped_indices, grouped_losses) #for performance
+        recent_losses = grouped_losses[-1*Config.recent_losses_shown:]
+        recent_losses_indices = grouped_indices[-1*Config.recent_losses_shown:]
+        self.grapher.update_line(1, "Training", recent_losses_indices, recent_losses)
+
 
 #every tick, we start by feeding in previous frame and input and previous frame's latent state. New frame produced and that is used (with input maybe) to get new latent state
     async def train(self):
