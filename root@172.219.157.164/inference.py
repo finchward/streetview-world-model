@@ -37,8 +37,6 @@ def sample_next_img(model, device, sample_name, prev_img, latent, next_img=None)
         starting_img += delta * dx
 
     out_img = model.decode_image(starting_img)
-    prev_img = model.decode_image(prev_img)
-    next_img = model.decode_image(next_img)
     out_img = torch.clamp(out_img, 0, 1)
     out_img = out_img.squeeze(0).detach().cpu().numpy()
     out_img = np.transpose(out_img, (1, 2, 0))

@@ -2,9 +2,9 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    model_name = "tv1"
-    load_model = False
-    loaded_model = "tv1"
+    model_name = "v8.52"
+    load_model = True
+    loaded_model = "v8.5"
     loaded_checkpoint = "main"
     
     #image occlusion
@@ -32,15 +32,18 @@ class Config:
     
     effective_batch_size = 256
 
-    sample_every_x_batches = 1998 #avoid being divisible by latent_persistence_turns
+    sample_every_x_batches = 4998 #avoid being divisible by latent_persistence_turns
     inference_samples = 4
     img_dir = 'images'
 
     model_resolution = (384, 512)
+    features = [64, 128, 256, 512] #we can double these though.
+    #64 -> 128 -> 256 -> 512 -> 1024/16 ->| 2048/16 |  -> 1024/32 append 2048/32 -> 1024/32 -> 512/64 -> 256/128 -> 128/256 -> 64/512
+    #256 -> 128 -> 64 -> 32 -> 16 |  192 -> 96 -> 48 -> 24 -> 12
     
-    batch_size = 8 # aim for divisibly by 4
-    latent_persistence_turns = 6
-    latent_reset_turns = 4
+    batch_size = 4 # aim for divisibly by 4
+    latent_persistence_turns = 11
+    latent_reset_turns = 3
     predictions_per_image = 1
 
     huber_delta = 0.1
@@ -57,7 +60,7 @@ class Config:
     ffd_dropout = 0.1
 
     mlp_hidden_size_ratio = 4
-    shortcut_percent = 0.25
+    shortcut_frequency = 4
 
     bottleneck_heads = 8
     squeeze_factor = 16 
@@ -90,9 +93,8 @@ class Config:
 
     graph_update_freq = 100
     recent_losses_shown = 200
-    loss_bucket_size = 100
+    loss_bucket_size = 1000
     save_freq = 2000
 
 
 
-    

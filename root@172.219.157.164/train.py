@@ -91,24 +91,24 @@ class Trainer:
         time = torch.rand((batch_size), device=self.device)
         v_target = (target - starting_noise)
         pt = starting_noise + v_target * time.view(batch_size, 1, 1, 1)
-        step_sizes = torch.zeros(batch_size, device=self.device)
+        step_sizes = torch.zeros(Config.batch_size, device=self.device)
         v_pred = self.model.predict_delta(pt, time, latent, step_sizes)
         loss = self.loss_fn(v_pred, v_target)
         return loss
 
     async def train_batch_shortcut(self, latent, batch_size, target):
-        values = torch.tensor([1/128, 1/64, 1/32, 1/16, 1/8, 1/4, 1/2], device=self.device)
-        indices = torch.randint(0, len(values), (batch_size,), device=self.device)
-        step_sizes = values[indices].to(self.device)
+        values = torch.tensor([1/128, 1/64, 1/32, 1/16, 1/8, 1/4, 1/2])
+        indices = torch.randint(0, len(values), (Config.batch_size,), device=self.device)
+        step_sizes = values[indices]
         step_sizes_grounded = step_sizes.clone()
-        step_sizes_grounded = torch.where(step_sizes == 1/128, 0.0, step_sizes_grounded).to(self.device)
+        step_sizes_grounded = torch.where(step_sizes == 1/128, 0.0, step_sizes_grounded)
         starting_noise = torch.randn_like(target)
         time = torch.rand((batch_size), device=self.device)
         v_target = target - starting_noise
         pt = starting_noise + v_target * time.view(batch_size, 1, 1, 1)
 
         first_step = self.model.predict_delta(pt, time, latent, step_sizes_grounded)
-        x_after_first_step = pt + first_step * step_sizes.view(batch_size, 1, 1, 1)
+        x_after_first_step = pt + first_step * step_sizes.view(Config.batch_size, 1, 1, 1)
         second_step = self.model.predict_delta(x_after_first_step, time + step_sizes, latent, step_sizes_grounded)
         
         v_target = (first_step + second_step).detach() / 2
@@ -129,7 +129,7 @@ class Trainer:
                 next_img = (await self.val_simulator.get_images()).to(self.device).float()
                 next_img = self.model.encode_image(next_img)
                 latent_state = self.model.predict_dynamics(prev_img, movement, latent_state)
-                if torch.rand(1).item() < Config.shortcut_percent:
+                if torch.rand(1).item() < 0.25:
                     loss = await self.train_batch_shortcut(latent_state, 1, next_img)
                 else:
                     loss = await self.train_batch(latent_state, 1, next_img)
@@ -143,7 +143,6 @@ class Trainer:
         self.model.train()
         prev_img = (await self.simulator.get_images()).to(self.device).float()
         prev_img = self.model.encode_image(prev_img)
-        print(prev_img.shape)
         total_loss = 0
         self.optimizer.zero_grad()
         accumulated_batches = 0
@@ -157,7 +156,7 @@ class Trainer:
             next_img = self.model.encode_image(next_img)
 
             latent_state = self.model.predict_dynamics(prev_img, movement, latent_state)
-            if torch.rand(1).item() < Config.shortcut_percent:
+            if idx % Config.shortcut_frequency == 0 :
                 loss = await self.train_batch_shortcut(latent_state, Config.batch_size, next_img)
             else:
                 loss = await self.train_batch(latent_state, Config.batch_size, next_img)

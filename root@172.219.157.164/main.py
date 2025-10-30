@@ -2,6 +2,7 @@ from config import Config
 from transformer import WorldModel
 from train import Trainer
 from replaysim import ReplaySimulator
+from simulator import Simulator
 import asyncio
 import argparse
 import torch.nn as nn
@@ -12,7 +13,7 @@ async def main(sim_url=None, sim_pass=None):
         model = nn.DataParallel(model)  # this wraps model for multi-GPU
     #simulator = RemoteSimulator(base_url=sim_url, password=sim_pass)
     train_simulator = ReplaySimulator(dataset_dir="dataset/webdataset_sharded", num_parallel_sequences=Config.batch_size)
-    val_simulator = ReplaySimulator(dataset_dir="dataset/webdataset_sharded_validation", num_parallel_sequences=1)
+    val_simulator = ReplaySimulator(dataset_dir="dataset/webdataset_sharded_val", num_parallel_sequences=1)
     
     await train_simulator.setup()
     await val_simulator.setup()
