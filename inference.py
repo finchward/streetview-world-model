@@ -29,7 +29,7 @@ def sample_next_img(model, device, sample_name, prev_img, latent, next_img=None)
     #     delta = model.predict_delta(starting_img, time_tensor, latent, shortcut_steps)
         
     #     starting_img += delta * dx
-    for time_step in range(Config.inference_samples):
+    for time_step in tqdm.tqdm(range(Config.inference_samples), desc="Sampling"):
         time_tensor = torch.tensor([time_step/Config.inference_samples]).to(device)
         dx = 1 / Config.inference_samples   
         shortcut_steps = torch.tensor([1/Config.inference_samples]).to(device)

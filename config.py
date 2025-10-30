@@ -58,6 +58,7 @@ class Config:
 
     mlp_hidden_size_ratio = 4
     shortcut_percent = 0.25
+    ema_ratio = 0.999
 
     bottleneck_heads = 8
     squeeze_factor = 16 

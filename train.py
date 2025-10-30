@@ -10,11 +10,13 @@ from inference import sample_next_img
 from config import Config
 import math
 from torchvision import transforms
+import copy
 
 class Trainer:
     def __init__(self, model, simulator, val_simulator):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model.to(self.device)
+        self.ema_model = copy.deepcopy(self.model)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
         self.val_simulator = val_simulator
@@ -107,9 +109,9 @@ class Trainer:
         v_target = target - starting_noise
         pt = starting_noise + v_target * time.view(batch_size, 1, 1, 1)
 
-        first_step = self.model.predict_delta(pt, time, latent, step_sizes_grounded)
+        first_step = self.ema_model.predict_delta(pt, time, latent, step_sizes_grounded)
         x_after_first_step = pt + first_step * step_sizes.view(batch_size, 1, 1, 1)
-        second_step = self.model.predict_delta(x_after_first_step, time + step_sizes, latent, step_sizes_grounded)
+        second_step = self.ema_model.predict_delta(x_after_first_step, time + step_sizes, latent, step_sizes_grounded)
         
         v_target = (first_step + second_step).detach() / 2
         v_pred = self.model.predict_delta(pt, time, latent, step_sizes * 2)
@@ -179,10 +181,12 @@ class Trainer:
                 total_loss.backward()
                 accumulated_batches += Config.batch_size
                 if accumulated_batches >= Config.effective_batch_size:
-                    print("Taking an optimiser step.")
                     self.optimizer.step()
                     self.optimizer.zero_grad()
                     accumulated_batches = 0
+
+                    self.update_ema(self.ema_model, self.model, Config.ema_ratio)
+
                 total_loss = 0
                 state_base = Path.cwd() / "states" / Config.model_name
                 state_base.mkdir(parents=True, exist_ok=True)
@@ -205,3 +209,15 @@ class Trainer:
             if idx % Config.graph_update_freq == 0:
                 self.update_graph()
 
+    def update_ema(self, ema_model, model, decay):
+        with torch.no_grad():
+            ema_params = dict(ema_model.named_parameters())
+            model_params = dict(model.named_parameters())
+            for name in ema_params.keys():
+                ema_params[name].data.mul_(decay).add_(model_params[name].data, alpha=1 - decay)
+
+            # Do the same for buffers (e.g., BatchNorm stats)
+            ema_buffers = dict(ema_model.named_buffers())
+            model_buffers = dict(model.named_buffers())
+            for name in ema_buffers.keys():
+                ema_buffers[name].copy_(model_buffers[name])
