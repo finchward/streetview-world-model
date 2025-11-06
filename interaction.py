@@ -35,9 +35,9 @@ def interact():
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if Config.is_latent_init_zeros:
-        latent = torch.zeros((1, Config.latent_dimension), device=device)
+        latent = torch.zeros((1, Config.hidden_size), device=device)
     elif Config.is_latent_init_noise:
-        latent = torch.randn((1, Config.latent_dimension), device=device)
+        latent = torch.randn((1, Config.hidden_size), device=device)
     else:
         latent = torch.load(
             Path.cwd() / "states" / Config.interactive_model / Config.interactive_latent, 

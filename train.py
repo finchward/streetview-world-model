@@ -11,6 +11,14 @@ from config import Config
 import math
 from torchvision import transforms
 import copy
+from collections import defaultdict
+
+
+def print_grad(name):
+    def hook(grad):
+        print(f"Gradient at {name}: {grad.norm() if grad is not None else 0}")
+        return None 
+    return hook
 
 class Trainer:
     def __init__(self, model, simulator, val_simulator):
@@ -20,7 +28,7 @@ class Trainer:
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
         self.val_simulator = val_simulator
-        self.loss_fn = nn.HuberLoss(delta=Config.huber_delta, reduction='sum')
+        self.loss_fn = nn.HuberLoss(delta=Config.huber_delta, reduction='mean')
 
         self.batch_count = 0
         self.batch_losses = []
@@ -84,6 +92,9 @@ class Trainer:
         if len(val_losses) > 0:
             val_indices = self.val_indices
             self.grapher.update_line(0, "Validation", val_indices, val_losses)
+            mask = [i > (self.batch_count - Config.recent_losses_shown) for i in val_indices]
+            val_indices = [i for i, m in zip(val_indices, mask) if m]
+            val_losses = [l for l, m in zip(val_losses, mask) if m]
             recent_val_losses = val_losses[-Config.recent_losses_shown:]
             recent_val_indices = val_indices[-Config.recent_losses_shown:]
             self.grapher.update_line(1, "Validation", recent_val_indices, recent_val_losses)
@@ -106,6 +117,8 @@ class Trainer:
         step_sizes_grounded = torch.where(step_sizes == 1/128, 0.0, step_sizes_grounded).to(self.device)
         starting_noise = torch.randn_like(target)
         time = torch.rand((batch_size), device=self.device)
+        time = torch.where(time + step_sizes > 1, 1 - step_sizes, time)
+
         v_target = target - starting_noise
         pt = starting_noise + v_target * time.view(batch_size, 1, 1, 1)
 
@@ -170,15 +183,19 @@ class Trainer:
 
             if idx % Config.sample_every_x_batches == 0:
                 with torch.no_grad():
-                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+                    sample_next_img(self.ema_model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
                     self.model.train()
 
-            prev_img = next_img.detach().clone()
+            prev_img = next_img.detach().clone()           
 
             if (idx + 1) % Config.latent_persistence_turns == 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
-                total_loss /= Config.effective_batch_size * Config.latent_persistence_turns
-                total_loss.backward()
+                
+                total_loss = total_loss / (Config.effective_batch_size / Config.batch_size)
+                effective_loss = total_loss / Config.latent_persistence_turns
+                effective_loss.backward()
+
+                #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
+                #self.debug()
                 accumulated_batches += Config.batch_size
                 if accumulated_batches >= Config.effective_batch_size:
                     self.optimizer.step()
@@ -187,7 +204,7 @@ class Trainer:
 
                     self.update_ema(self.ema_model, self.model, Config.ema_ratio)
 
-                total_loss = 0
+                total_loss = torch.zeros((), device=self.device)
                 state_base = Path.cwd() / "states" / Config.model_name
                 state_base.mkdir(parents=True, exist_ok=True)
 
@@ -209,6 +226,7 @@ class Trainer:
             if idx % Config.graph_update_freq == 0:
                 self.update_graph()
 
+
     def update_ema(self, ema_model, model, decay):
         with torch.no_grad():
             ema_params = dict(ema_model.named_parameters())
@@ -221,3 +239,30 @@ class Trainer:
             model_buffers = dict(model.named_buffers())
             for name in ema_buffers.keys():
                 ema_buffers[name].copy_(model_buffers[name])
+
+
+    def debug(self):
+        grouped = defaultdict(float)
+        for name, param in self.model.named_parameters():
+            if param.grad is not None:
+                grad = param.grad.norm(2).item()
+            else:
+                grad = 0
+            print("DEBUG START")
+            print(f"{name}: {grad}")
+            layer = name.split(".")[0]
+            grouped[layer] += grad ** 2
+
+        print("GROUPING START")
+        print("-"*60)
+
+        for layer, sum in grouped.items():
+            print(f"{layer}: {(sum ** 0.5):.4f}")
+
+    def check_model_health(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                grad_norm = param.grad.norm(2).item() if param.grad is not None else 0.0
+                param_norm = param.norm(2).item()
+                ratio = grad_norm/param_norm if param_norm != 0 else 1 
+                print(f"{name} : param={param_norm:.3f}, grad={grad_norm:.8f}, ratio={ratio:.6f}")

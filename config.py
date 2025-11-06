@@ -2,73 +2,58 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    model_name = "tv1"
+    #Model Loading config
+    model_name = "tv4"
     load_model = False
-    loaded_model = "tv1"
+    loaded_model = "tv2"
     loaded_checkpoint = "main"
-    
-    #image occlusion
-    erasing_p = 0.5
-    erasing_scale = (0.05, 0.25)
-    erasing_ratio = (0.3, 3.3)
-    erasing_value='random'
 
-    is_tpu = False
-    drive_dir = '/content/drive/ml/streetview'
-
-    from_noise = True
-
-    sigma_min = 0.01
-
-    graph_dir = 'graphs'
-    is_multi_gpu = False
-
+    #Sampling config
     is_interacting = True
     interactive_model = "v8.52"
     interactive_checkpoint = "main"
     interactive_latent = "idx_35.pt"
     is_latent_init_noise = False
     is_latent_init_zeros = False
-    
-    effective_batch_size = 256
 
-    sample_every_x_batches = 1998 #avoid being divisible by latent_persistence_turns
-    inference_samples = 4
-    img_dir = 'images'
-
-    model_resolution = (384, 512)
-    
-    batch_size = 8 # aim for divisibly by 4
-    latent_persistence_turns = 6
-    latent_reset_turns = 4
-    predictions_per_image = 1
-
-    huber_delta = 0.1
-
+    #Model architecture config
     layers = 12
     hidden_size = 768
     heads = 12
-    patch_size = 2
-
-    validation_frequency = 500
-    validation_samples = 20
-
+    patch_size = 4
     attn_dropout = 0.1
     ffd_dropout = 0.1
-
     mlp_hidden_size_ratio = 4
-    shortcut_percent = 0.25
-    ema_ratio = 0.999
+    memory_layers = 3
 
-    bottleneck_heads = 8
-    squeeze_factor = 16 
-    group_size = 32
-    time_embedding_dim = 512 #Must be even
-    movement_embedding_dim = 256
-    latent_dimension = 2048
-    max_batches = 50_000_000
+    #Training information
+    graph_dir = 'graphs'
+    sample_every_x_batches = 1998 #avoid being divisible by latent_persistence_turns 
+    inference_samples = 4
+    img_dir = 'images'
+    validation_frequency = 500 #sample 1998 and 500 used to be.
+    validation_samples = 20
+    graph_update_freq = 100
+    recent_losses_shown = 200 #used to be 200
+    loss_bucket_size = 100 #used to be 100
+    save_freq = 2000
+
+    #Training
+    from_noise = True
+    batch_size = 64
+    effective_batch_size = 256 #256
+    model_resolution = (384, 512)
+    latent_persistence_turns = 3
+    latent_reset_turns = 3
+    huber_delta = 0.1
+    shortcut_percent = 0.25
+    ema_ratio = 0.99 #0.999
+    max_batches = 500_000_000
+    learning_rate = 2e-4 #1e-4
+    weight_decay = 0.1
+
+    #Data generation
     rotation_probability = 0.7
-    
     initial_pages = [
         r"https://www.google.com/maps/@-34.7826845,173.1006281,3a,75y,48.05h,109.63t/data=!3m7!1e1!3m5!1sjWIbsBBMN4YiWwdgLl5Y5A!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D-19.63436488427803%26panoid%3DjWIbsBBMN4YiWwdgLl5Y5A%26yaw%3D48.045970941061924!7i13312!8i6656?entry=ttu&g_ep=EgoyMDI1MDkzMC4wIKXMDSoASAFQAw%3D%3D",
         r"https://www.google.com/maps/@-37.1915928,174.654654,3a,75y,265.22h,85.04t/data=!3m7!1e1!3m5!1sxCmXgULR3Wewk4gGIGPsow!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D4.95869070845373%26panoid%3DxCmXgULR3Wewk4gGIGPsow%26yaw%3D265.2245735720425!7i13312!8i6656?entry=ttu&g_ep=EgoyMDI1MDkzMC4wIKXMDSoASAFQAw%3D%3D",
@@ -86,13 +71,9 @@ class Config:
 #         r"https://www.google.com/maps/@-38.5922817,176.8199381,3a,75y,271.3h,104.26t/data=!3m7!1e1!3m5!1s1Pt-bx9x0-vdMyd-R05xZw!2e0!6shttps:%2F%2Fstreetviewpixels-pa.googleapis.com%2Fv1%2Fthumbnail%3Fcb_client%3Dmaps_sv.tactile%26w%3D900%26h%3D600%26pitch%3D-14.260361780245958%26panoid%3D1Pt-bx9x0-vdMyd-R05xZw%26yaw%3D271.30228279891134!7i13312!8i6656?entry=ttu&g_ep=EgoyMDI1MDkwNy4wIKXMDSoASAFQAw%3D%3D",
 #    ] # make one of these huia
 
-    learning_rate = 1e-4
-    weight_decay = 0.1
+    
 
-    graph_update_freq = 100
-    recent_losses_shown = 200
-    loss_bucket_size = 100
-    save_freq = 2000
+    
 
 
 

@@ -4,44 +4,8 @@ import torch.nn.functional as F
 import math
 from config import Config
 from diffusers import AutoencoderKL
+from diffusers.image_processor import VaeImageProcessor
 import traceback
-
-class Dynamics(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.embed_scene = nn.Sequential(
-            nn.Linear(4 * 48 * 64, 1024),
-            nn.SiLU(),
-            nn.Dropout(0.1),
-            nn.Linear(1024, 1024),
-            nn.LayerNorm(1024)
-        )
-        self.embed_movement = nn.Linear(6, 64)
-
-        self.predict =  nn.Sequential(
-            nn.Linear(Config.hidden_size + 1024 + 64, Config.hidden_size),
-            nn.SiLU(),
-            nn.Dropout(0.1),
-            nn.Linear(Config.hidden_size, Config.hidden_size),
-            nn.LayerNorm(Config.hidden_size)
-        )
-        nn.init.zeros_(self.predict[-1].weight)
-        nn.init.zeros_(self.predict[-1].bias)
-
-    def forward(self, scene, movement, prev_state):
-        try:
-            #take in [b, 4, 32, 32], [b, 6], [b, 1024]
-            scene = scene.reshape(scene.size(0), -1)
-            scene_emb = self.embed_scene(scene)
-            movement_emb = self.embed_movement(movement)
-
-            new_state = prev_state + self.predict(torch.cat((prev_state, scene_emb, movement_emb), dim=-1)) 
-            #new_state = F.normalize(new_state, dim=-1)
-            return new_state
-        except Exception as e:
-            print("Error:", e)
-            traceback.print_exc()
 
 
 class TransformerBlock(nn.Module):
@@ -93,6 +57,13 @@ class TransformerBlock(nn.Module):
 
         return x
 
+def fourier_encode(pos, dim=256):
+    i = torch.arange(dim // 2, device=pos.device)
+    denom = torch.pow(1e4, -2 * i / dim)
+    enc = torch.cat([torch.sin(pos.unsqueeze(-1) * denom),
+                     torch.cos(pos.unsqueeze(-1) * denom)], dim=-1)
+    return enc
+
 class Transformer(nn.Module):
     def __init__(self):
         super().__init__()
@@ -114,45 +85,41 @@ class Transformer(nn.Module):
         )
         self.depatchify = nn.Linear(Config.hidden_size, 4 * Config.patch_size * Config.patch_size)
 
+        self.classifier_token = nn.Embedding(num_embeddings=1, embedding_dim=Config.hidden_size)
+        self.rnn_layers = nn.ModuleList([TransformerBlock() for _ in range(Config.memory_layers)])
+        self.embed_movement = nn.Linear(6, Config.hidden_size)
+
+    def img_to_tokens(self, x):
+        base_b, base_c, base_h, base_w = x.shape
+        x = x.reshape(base_b, 
+                        base_c,
+                        base_h // Config.patch_size, 
+                        Config.patch_size, 
+                        base_w // Config.patch_size, 
+                        Config.patch_size)
+        x = x.permute(0, 2, 4, 3, 5, 1)
+        b, h_p, w_p, ph, pw, c = x.shape
+        x = x.reshape(b, h_p * w_p, ph * pw * c)
+
+        pos_y, pos_x = torch.meshgrid(
+            torch.arange(h_p, device=x.device),
+            torch.arange(w_p, device=x.device),
+            indexing='ij'
+        )
+        pos_x = pos_x.reshape(-1)
+        pos_y = pos_y.reshape(-1)
+
+        enc_x = fourier_encode(pos_x / (w_p-1), Config.hidden_size//2)
+        enc_y = fourier_encode(pos_y / (h_p -1), Config.hidden_size//2)
+        pos_emb = torch.cat([enc_x, enc_y], dim=-1)  
+        x = self.patchify(x)
+        x = x + pos_emb.unsqueeze(0)  
+        return x
 
     def forward(self, x, timestep, memory, step_size):
         try:
-            #conditioning consists of: timestep[b], memory[b, 1024]
-
-            #[b, 4, 32, 32]
             base_b, base_c, base_h, base_w = x.shape
-            x = x.reshape(base_b, 
-                            base_c,
-                            base_h // Config.patch_size, 
-                            Config.patch_size, 
-                            base_w // Config.patch_size, 
-                            Config.patch_size)
-            x = x.permute(0, 2, 4, 3, 5, 1)
-            b, h_p, w_p, ph, pw, c = x.shape  # b=batch, h_p=w_p=patches, ph=pw=patch height/width, c=channels
-            x = x.reshape(b, h_p * w_p, ph * pw * c)
-
-            pos_y, pos_x = torch.meshgrid(
-                torch.arange(h_p, device=x.device),
-                torch.arange(w_p, device=x.device),
-                indexing='ij'
-            )
-            pos_x = pos_x.reshape(-1)  # [64]
-            pos_y = pos_y.reshape(-1)  # [64]
-
-            def fourier_encode(pos, dim=256):
-                i = torch.arange(dim // 2, device=pos.device)
-                denom = 1/(10_000**(2*i/dim))
-                enc = torch.cat([torch.sin(pos.unsqueeze(-1) / denom),
-                            torch.cos(pos.unsqueeze(-1) / denom)], dim=-1) #[64, 256]
-
-                return enc  # [64, 256]
-
-            enc_x = fourier_encode(pos_x / (w_p-1), Config.hidden_size//2)
-            enc_y = fourier_encode(pos_y / (h_p -1), Config.hidden_size//2)
-            pos_emb = torch.cat([enc_x, enc_y], dim=-1)  # [64, 256]
-            x = self.patchify(x) #[b, 64, 1024]
-            x = x + pos_emb.unsqueeze(0)  
-
+            x = self.img_to_tokens(x)
             timestep_emb = fourier_encode(timestep * 1000, dim=256)
             timestep_emb = self.embed_timestep(timestep_emb)
 
@@ -179,37 +146,53 @@ class Transformer(nn.Module):
             x = x * gamma + beta
             x = self.depatchify(x)    
 
-            x = x.reshape(b, h_p, w_p, ph, pw, c)
+            x = x.reshape(base_b, base_h // Config.patch_size, base_w // Config.patch_size, Config.patch_size, Config.patch_size, base_c)
             x = x.permute(0, 5, 1, 3, 2, 4) 
-            x = x.reshape(b, c, base_h, base_w)  
+            x = x.reshape(base_b, base_c, base_h, base_w)  
 
             return x
         except Exception as e:
             print("Error:", e)
             traceback.print_exc()
 
+    def dynamics(self, scene, movement, prev_state):
+        scene_tokens = self.img_to_tokens(scene)
+        prev_state = prev_state.unsqueeze(1)
+        conditioning = self.embed_movement(movement).unsqueeze(1)
+        tokens = torch.cat([prev_state, scene_tokens], dim=1)
+        for layer in self.rnn_layers:
+            tokens = layer(tokens, conditioning)
+        new_state = tokens[:, 0, :]
+        return new_state
+    
+
 class WorldModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.backbone = Transformer()
-        self.dynamics = Dynamics()
-        vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
+        vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse") 
         for param in vae.parameters():
             param.requires_grad = False
         self.vae = vae.eval()
+        self.image_processor = VaeImageProcessor(do_normalize=True)
     
     def predict_delta(self, x, timestep, memory, step_size):
         return self.backbone(x, timestep, memory, step_size)
     
     def encode_image(self, x):
-        latent_dist = self.vae.encode(x).latent_dist
-        return latent_dist.sample()
+        x = self.image_processor.preprocess(x, height=Config.model_resolution[0], width=Config.model_resolution[1])
+        latent = self.vae.encode(x).latent_dist.mode()
+        latent = latent * 0.18215
+        return latent
     
     def decode_image(self, x):
-        return self.vae.decode(x).sample
+        x = x / 0.18215
+        x = self.vae.decode(x).sample
+        x = self.image_processor.postprocess(x, output_type="pt", do_denormalize=[True])
+        return x
 
     def predict_dynamics(self, scene, movement, prev_state):
-        return self.dynamics(scene, movement, prev_state)
+        return self.backbone.dynamics(scene, movement, prev_state)
 
 def get_model():
     return WorldModel()

@@ -9,8 +9,7 @@ import torch.nn as nn
 
 async def main(sim_url=None, sim_pass=None):
     model = WorldModel()
-    if Config.is_multi_gpu:
-        model = nn.DataParallel(model)  # this wraps model for multi-GPU
+
     #simulator = RemoteSimulator(base_url=sim_url, password=sim_pass)
     train_simulator = ReplaySimulator(dataset_dir="dataset/webdataset_sharded", num_parallel_sequences=Config.batch_size)
     val_simulator = ReplaySimulator(dataset_dir="dataset/webdataset_sharded_val", num_parallel_sequences=1)
