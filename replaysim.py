@@ -8,56 +8,42 @@ from torchvision import transforms
 from config import Config
 import re
 from collections import defaultdict
-
-def safe_json(x):
-    # Called when json field exists; you can parse, or return default if missing or invalid
-    try:
-        # if x is bytes or str
-        return json.loads(x) if (isinstance(x, (bytes, str))) else x
-    except Exception:
-        return None
+from math import floor
 
 def has_fields(sample):
-    # filter out samples that don’t have a jpg and valid json
-    return "jpg" in sample and "json" in sample  # you can also check for sample.get("json") not None
+    # Keep only samples that contain both modalities
+    return "jpg" in sample and "json" in sample
 
 class ReplaySimulator:
     """
-    A drop-in replacement for the Simulator that replays recorded data from webdatasets.
-    It can read from multiple page sequences in parallel.
-    """
-    def __init__(self, dataset_dir: str, num_parallel_sequences: int):
-        """
-        Initializes the ReplaySimulator.
-        It automatically discovers the total number of sequences from the dataset_dir.
+    Replay recorded data from webdatasets with a single logical queue:
 
-        Args:
-            dataset_dir (str): The directory where the webdataset shards are stored.
-            num_parallel_sequences (int): The number of sequences to read in parallel (e.g., 9).
-        """
+      page_001-000001, page_001-000002, ..., page_001-000500,
+      page_002-000001, ..., page_003-..., etc.
+
+    Each parallel sequence starts at an even offset along this flattened queue
+    and loops from the start when it reaches the end.
+    """
+
+    def __init__(self, dataset_dir: str, num_parallel_sequences: int):
         self.dataset_dir = dataset_dir
         self.num_parallel = num_parallel_sequences
-        self.total_sequences = 0  # Will be set by _find_all_sequence_shards
 
-        # Find shards first to determine self.total_sequences
-        self._sequence_paths = self._find_all_sequence_shards()
- 
-        if self.num_parallel > self.total_sequences:
-            print(f"Warning: Number of parallel sequences ({self.num_parallel}) "
-                  f"exceeds total sequence index range ({self.total_sequences}). "
-                  "This is OK if you intend to oversample.")
-            # Or raise the error if you prefer:
-            # raise ValueError("Number of parallel sequences cannot exceed total available sequences.")
+        # Discover shards per page, sorted, and a fully-flattened queue
+        self._sequence_paths, self._flat_paths = self._discover_and_flatten()
 
-        # Track which sequence index each parallel reader is currently assigned to
-        # Use modulo to handle oversampling (e.g., 9 parallel with 4 sequences)
-        self.active_sequence_indices = [i % self.total_sequences for i in range(self.num_parallel)]
-        
-        # The next sequence index to load when one of the active ones finishes
-        # Start from the next index after the initial assignments
-        self.next_sequence_to_load = self.num_parallel
+        if len(self._flat_paths) == 0:
+            raise FileNotFoundError(f"No webdataset shards found in: {self.dataset_dir}")
 
-        self._iterators = [self._create_iterator_for_sequence(i) for i in self.active_sequence_indices]
+        self.total_sequences = len(self._sequence_paths)  # number of page indices discovered
+
+        # Fixed even-spaced starting offsets across the flattened queue
+        N = len(self._flat_paths)
+        P = max(1, self.num_parallel)
+        self._start_offsets = [round(i * N / P) % N for i in range(P)]
+
+        # One iterator per parallel stream, each looping the flattened queue
+        self._iterators = [self._create_iterator_from_offset(off) for off in self._start_offsets]
 
         self._current_images = None
         self._current_movements = None
@@ -67,123 +53,113 @@ class ReplaySimulator:
             transforms.ToTensor(),
         ])
 
-    def _find_all_sequence_shards(self):
+    def _discover_and_flatten(self):
         """
-        Finds and groups all shard files by their page index.
-        This method scans the directory, parses filenames, and sets
-        self.total_sequences based on the *highest sequence index* found.
+        Returns:
+          sequence_paths: dict[int, list[str]]  # per-page shard lists (sorted)
+          flat_paths: list[str]                  # page-major flattened list
         """
         print(f"Scanning {self.dataset_dir} for webdataset shards...")
-        
-        # Regex to find 'page_XXX-' where XXX is 3 digits
-        pattern = re.compile(r"page_(\d{3})-.*\.tar")
-        
-        all_shards = defaultdict(list)
-        shard_pattern = os.path.join(self.dataset_dir, "page_*.tar")
-        all_files = glob.glob(shard_pattern)
+
+        # Accept variable digit counts for page and shard numbers.
+        # Examples: page_001-000123.tar, page_12-7.tar
+        pattern = re.compile(r"page_(\d+)-(\d+)\.tar$")
+        shard_glob = os.path.join(self.dataset_dir, "page_*.tar")
+        all_files = glob.glob(shard_glob)
 
         if not all_files:
-            raise FileNotFoundError(f"No webdataset shards found matching '{shard_pattern}' in: {self.dataset_dir}")
+            raise FileNotFoundError(f"No webdataset shards found matching '{shard_glob}' in: {self.dataset_dir}")
 
-        max_idx = -1
+        per_page = defaultdict(list)
         for filepath in all_files:
-            filename = os.path.basename(filepath)
-            match = pattern.match(filename)
-            
-            if match:
-                seq_idx = int(match.group(1))
-                all_shards[seq_idx].append(filepath)
-                if seq_idx > max_idx:
-                    max_idx = seq_idx
-            else:
-                print(f"Warning: Found file matching pattern but not regex: {filename}")
+            name = os.path.basename(filepath)
+            m = pattern.match(name)
+            if not m:
+                print(f"Warning: ignoring unexpected shard name: {name}")
+                continue
+            page_idx = int(m.group(1))
+            shard_idx = int(m.group(2))
+            per_page[page_idx].append((shard_idx, filepath))
 
-        if not all_shards:
-            raise FileNotFoundError(f"No valid 'page_XXX-...' shards found in: {self.dataset_dir}")
+        if not per_page:
+            raise FileNotFoundError(f"No valid 'page_XXX-YYY.tar' shards found in: {self.dataset_dir}")
 
-        # Set the total sequences based on the highest index found + 1
-        # This correctly handles sparse sequences (e.g., if only 000 and 005 exist,
-        # total_sequences will be 6, and indices 1-4 will be empty)
-        self.total_sequences = max_idx + 1
-        
-        # Sort the shards for each sequence to ensure correct order
-        for idx in all_shards:
-            all_shards[idx].sort()
-            
-        print(f"Found {len(all_shards)} unique page sequences. Max index: {max_idx}. Set total_sequences to {self.total_sequences}.")
-        return dict(all_shards)
+        # Sort shards numerically within each page; then sort pages
+        sequence_paths = {}
+        for page_idx in sorted(per_page.keys()):
+            per_page[page_idx].sort(key=lambda x: x[0])  # by shard_idx
+            sequence_paths[page_idx] = [p for (_, p) in per_page[page_idx]]
 
-    def _create_iterator_for_sequence(self, sequence_idx: int):
-        """Creates a webdataset iterator for a given page/sequence index."""
-        if sequence_idx not in self._sequence_paths:
-            print(f"Warning: No data found for sequence index {sequence_idx}. Returning empty iterator.")
+        # Flatten page-major
+        flat_paths = []
+        for page_idx in sorted(sequence_paths.keys()):
+            flat_paths.extend(sequence_paths[page_idx])
+
+        print(
+            f"Found {len(sequence_paths)} pages and {len(flat_paths)} shards total. "
+            f"Flattened queue is page-major and shard-order-preserving."
+        )
+
+        return sequence_paths, flat_paths
+
+    def _create_iterator_from_offset(self, offset: int):
+        """
+        Create a WebDataset iterator over a rotation of the flattened queue
+        that starts at 'offset' and runs to the end, then the front.
+
+        When this iterator exhausts, we will recreate it to loop again.
+        """
+        N = len(self._flat_paths)
+        if N == 0:
             return iter([])
-
-        dataset_paths = self._sequence_paths[sequence_idx]
-        print(f"Loading {len(dataset_paths)} shards for sequence {sequence_idx}...")
-        
-        # Create a dataset that decodes JPEGs to PIL images and keeps JSON as is
-        dataset = wds.WebDataset(dataset_paths, handler=wds.ignore_and_continue).decode("pil", handler=wds.ignore_and_continue).select(has_fields).to_tuple("jpg", "json")
+        offset = offset % N
+        rotated = self._flat_paths[offset:] + self._flat_paths[:offset]
+        dataset = (
+            wds.WebDataset(rotated, handler=wds.ignore_and_continue)
+              .decode("pil", handler=wds.ignore_and_continue)
+              .select(has_fields)
+              .to_tuple("jpg", "json")
+        )
         return iter(dataset)
 
     async def setup(self):
-        """
-        Performs initial setup, including loading the first batch of data.
-        This makes it a true drop-in replacement for the original simulator.
-        """
-        print("ReplaySimulator: Setting up and loading initial data...")
+        print("ReplaySimulator: Setting up and priming first batch...")
         await self.increment()
-        print("ReplaySimulator: Setup complete. Data is ready.")
+        print("ReplaySimulator: Ready.")
 
     async def increment(self):
         images_batch = []
         movements_batch = []
 
         for i in range(self.num_parallel):
-            while True:  # keep advancing until we get a valid sample
+            while True:
                 try:
                     img, move_json = next(self._iterators[i])
                 except StopIteration:
-                    print(f"Sequence {self.active_sequence_indices[i]} finished.")
-                    new_sequence_idx = self.next_sequence_to_load % self.total_sequences
-                    self.active_sequence_indices[i] = new_sequence_idx
-                    self.next_sequence_to_load += 1
-                    print(f"Loading next sequence: {new_sequence_idx}")
-                    self._iterators[i] = self._create_iterator_for_sequence(new_sequence_idx)
-                    continue  # try again with the new iterator
+                    # Loop this iterator from the start of its rotated queue
+                    self._iterators[i] = self._create_iterator_from_offset(self._start_offsets[i])
+                    continue
 
-                # Skip bad samples (missing either part)
                 if img is None or move_json is None:
                     continue
 
-                # If we reach here, we have both image and json
                 break
 
-            # Process the image and movement data
             img_tensor = self._image_transform(img)
-            move_data = json.loads(move_json) if isinstance(move_json, (str, bytes)) else move_json
+            move = json.loads(move_json) if isinstance(move_json, (str, bytes)) else move_json
 
             images_batch.append(img_tensor)
-            movements_batch.append(torch.tensor(move_data, dtype=torch.float32))
+            movements_batch.append(torch.tensor(move, dtype=torch.float32))
 
         self._current_images = torch.stack(images_batch)
         self._current_movements = torch.stack(movements_batch)
 
-
     async def get_images(self) -> torch.Tensor:
-        """
-        Returns the current batch of images.
-        Shape: [num_parallel_sequences, 3, H, W]
-        """
         if self._current_images is None:
-            raise RuntimeError("You must call increment() or setup() before get_images().")
+            raise RuntimeError("Call increment() or setup() before get_images().")
         return self._current_images
 
     async def get_movement(self) -> torch.Tensor:
-        """
-        Returns the current batch of movements.
-        Shape: [num_parallel_sequences, 6]
-        """
         if self._current_movements is None:
-            raise RuntimeError("You must call increment() or setup() before get_movement().")
+            raise RuntimeError("Call increment() or setup() before get_movement().")
         return self._current_movements

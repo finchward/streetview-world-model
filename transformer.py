@@ -73,7 +73,6 @@ class Transformer(nn.Module):
             nn.Linear(256, Config.hidden_size),
             nn.SiLU(),
             nn.Linear(Config.hidden_size, Config.hidden_size),
-            nn.SiLU()
         )
         self.embed_step_size = nn.Embedding(num_embeddings=9, embedding_dim=Config.hidden_size)
 
@@ -87,7 +86,13 @@ class Transformer(nn.Module):
 
         self.classifier_token = nn.Embedding(num_embeddings=1, embedding_dim=Config.hidden_size)
         self.rnn_layers = nn.ModuleList([TransformerBlock() for _ in range(Config.memory_layers)])
-        self.embed_movement = nn.Linear(6, Config.hidden_size)
+        self.embed_movement = nn.Sequential(
+            nn.Linear(6, Config.hidden_size),
+            nn.SiLU(),
+            nn.Linear(Config.hidden_size, Config.hidden_size),
+        )
+        
+                                            
 
     def img_to_tokens(self, x):
         base_b, base_c, base_h, base_w = x.shape

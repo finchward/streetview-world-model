@@ -12,7 +12,7 @@ import math
 from torchvision import transforms
 import copy
 from collections import defaultdict
-
+from torch.distributions import Normal, kl_divergence
 
 def print_grad(name):
     def hook(grad):
@@ -28,9 +28,9 @@ class Trainer:
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
         self.val_simulator = val_simulator
-        self.loss_fn = nn.HuberLoss(delta=Config.huber_delta, reduction='mean')
+        self.loss_fn = nn.MSELoss()
 
-        self.batch_count = 0
+        self.batch_count = 1
         self.batch_losses = []
         self.val_losses = []
         self.val_indices = []
@@ -69,7 +69,6 @@ class Trainer:
 
     def update_graph(self):
         losses = self.batch_losses
-        val_losses = self.val_losses
 
         grouped_losses = []
         grouped_indices = []
@@ -89,15 +88,15 @@ class Trainer:
         recent_losses_indices = grouped_indices[-1*Config.recent_losses_shown:]
         self.grapher.update_line(1, "Training", recent_losses_indices, recent_losses)
 
-        if len(val_losses) > 0:
-            val_indices = self.val_indices
-            self.grapher.update_line(0, "Validation", val_indices, val_losses)
-            mask = [i > (self.batch_count - Config.recent_losses_shown) for i in val_indices]
-            val_indices = [i for i, m in zip(val_indices, mask) if m]
-            val_losses = [l for l, m in zip(val_losses, mask) if m]
-            recent_val_losses = val_losses[-Config.recent_losses_shown:]
-            recent_val_indices = val_indices[-Config.recent_losses_shown:]
-            self.grapher.update_line(1, "Validation", recent_val_indices, recent_val_losses)
+        if self.val_losses:
+            self.grapher.update_line(0, "Validation", self.val_indices, self.val_losses)
+            for i, val_index in enumerate(self.val_indices):
+                if val_index > self.batch_count - Config.recent_losses_shown:
+                    truncated_val_losses = self.val_losses[i:]
+                    truncated_val_indices = self.val_indices[i:]
+                    self.grapher.update_line(1, "Validation", truncated_val_indices, truncated_val_losses)
+
+            
 
     async def train_batch(self, latent, batch_size, target):
         starting_noise = torch.randn_like(target)
@@ -179,22 +178,22 @@ class Trainer:
 
             self.batch_losses.append(loss.item())
             self.batch_count += 1      
-            total_loss += loss 
+            total_loss += loss     
 
             if idx % Config.sample_every_x_batches == 0:
                 with torch.no_grad():
-                    sample_next_img(self.ema_model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
                     self.model.train()
 
             prev_img = next_img.detach().clone()           
 
-            if (idx + 1) % Config.latent_persistence_turns == 0:
+            if idx % Config.latent_persistence_turns == 0:
                 
                 total_loss = total_loss / (Config.effective_batch_size / Config.batch_size)
                 effective_loss = total_loss / Config.latent_persistence_turns
                 effective_loss.backward()
 
-                #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
                 #self.debug()
                 accumulated_batches += Config.batch_size
                 if accumulated_batches >= Config.effective_batch_size:
@@ -210,7 +209,7 @@ class Trainer:
 
                 state_path = state_base / f"idx_{(idx+1) % (Config.latent_persistence_turns * Config.latent_reset_turns)}.pt"
                 torch.save(latent_state, state_path)
-                if (idx + 1) % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
+                if idx % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
                     latent_state = torch.zeros_like(latent_state, device=self.device) 
                 else:
                     latent_state = latent_state.detach()
