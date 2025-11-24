@@ -6,3 +6,6 @@ simulator_server
 checkpoints
 states
 dataset
+myenv
+venv
+test_dataset
