@@ -6,8 +6,8 @@ simulator_server
 checkpoints
 states
 dataset
-checkpoints
-root@172.219.157.164
-states
-test_dataset
+myenv
 venv
+test_dataset
+root@172.219.157.164
+
