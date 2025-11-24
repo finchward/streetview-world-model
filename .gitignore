@@ -6,3 +6,8 @@ simulator_server
 checkpoints
 states
 dataset
+checkpoints
+root@172.219.157.164
+states
+test_dataset
+venv

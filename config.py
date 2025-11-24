@@ -10,11 +10,13 @@ class Config:
 
     #Sampling config
     is_interacting = True
-    interactive_model = "v8.52"
-    interactive_checkpoint = "main"
+    interaction_samples = 8
+    interactive_model = "tv6.5_b20k"
+    interactive_checkpoint = "main.chkp"
     interactive_latent = "idx_35.pt"
     is_latent_init_noise = False
-    is_latent_init_zeros = False
+    is_latent_init_zeros = True
+    guidance_factor = 1
 
     #Model architecture config
     layers = 12

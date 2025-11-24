@@ -8,9 +8,10 @@ from pathlib import Path
 from config import Config
 # Distributed imports
 import torch.distributed as dist
-from model import WorldModel
+from transformer import WorldModel
 import math
 from torchdiffeq import odeint
+from PIL import Image
 
 def convert_to_vector(x, y, w, h):
     nx = (2.0 * x - w) / w
@@ -55,52 +56,32 @@ def interact():
     height = Config.model_resolution[0]
     width = Config.model_resolution[1]
 
-    out_image = torch.randn((1, 3, height, width), device=device)
+    out_image = torch.zeros([1, 4, 48, 64], device=device)
     fig, ax = plt.subplots()
-    im = ax.imshow(torch_to_image(out_image))
-    plt.ion()
+    im = ax.imshow(Image.new("RGB", (512, 384), color="white"))
 
     def update_display(tensor):
         im.set_data(torch_to_image(tensor))
-        fig.canvas.draw_idle()
+        fig.canvas.draw()
         fig.canvas.flush_events()
-
-
-    class ODEFunc(torch.nn.Module):
-        def __init__(self, model, latent):
-            super().__init__()
-            self.model = model
-            self.latent = latent
-
-        def forward(self, t, x):
-            time_tensor = torch.ones(x.shape[0], device=x.device) * t
-            with torch.no_grad():
-                zeros = torch.zeros_like(self.latent)
-                delta_uncond = self.model.predict_delta(x, time_tensor, zeros)
-                delta_cond = self.model.predict_delta(x, time_tensor, self.latent)
-                delta_net = delta_uncond + 3 * (delta_cond - delta_uncond)
-                
-            return delta_net
 
     def update_image():
         nonlocal out_image
         model.eval()
-        ode_func = ODEFunc(model, latent)
-        x0 = torch.randn((1, 3, height, width), device=device)
-        t_span = torch.tensor([0.0, 1.0], device=device)
+        out_image = torch.randn([1, 4, 48, 64], device=device)
 
         with torch.no_grad():
-            solution = odeint(
-                ode_func, 
-                x0, 
-                t_span, 
-                method='dopri5', # A good adaptive solver (RK45)
-                rtol=1e-4,       # Relative tolerance
-                atol=1e-4        # Absolute tolerance
-            )
-        out_image = solution[-1]
+            for time_step in tqdm.tqdm(range(Config.interaction_samples), desc="Sampling"):
+                time_tensor = torch.tensor([time_step/Config.interaction_samples]).to(device)
+                dx = 1 / Config.interaction_samples   
+                shortcut_steps = torch.tensor([1/Config.interaction_samples]).to(device)
+                delta = model.predict_delta(out_image, time_tensor, latent, shortcut_steps)
+                if Config.guidance_factor > 1:
+                    base_delta = model.predict_delta(out_image, time_tensor, torch.zeros_like(latent), shortcut_steps)
+                    delta = Config.guidance_factor * (delta - base_delta) + base_delta
+                out_image += delta * dx
+                update_display(model.decode_image(out_image.clone()))
         
-        update_display(out_image)
         print("New image predicted")
 
     def sample(movement):
@@ -108,15 +89,6 @@ def interact():
         latent = model.predict_dynamics(out_image, movement, latent)
         print("New latent predicted")
         update_image()
-        
-
-    update_image()
-
-    start = None
-    end = None
-    dragging = False
-    threshold = 10 #pixels
-
 
     def on_press(event):
         nonlocal start, dragging
@@ -169,11 +141,23 @@ def interact():
         movement = torch.tensor([wq, xq, yq, zq, 0, 0], device=device, dtype=torch.float32).unsqueeze(0)
         sample(movement)
 
+
+    start = None
+    end = None
+    dragging = False
+    threshold = 10 #pixels
+        
+    
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
     fig.canvas.mpl_connect("button_release_event", on_release)
 
+    plt.ion()
+    plt.show(block=False)
+    update_image()
+    plt.ioff()
     plt.show(block=True)
+
 
 
 if __name__ == "__main__":
