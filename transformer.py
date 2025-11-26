@@ -91,7 +91,7 @@ class Transformer(nn.Module):
             nn.SiLU(),
             nn.Linear(Config.hidden_size, Config.hidden_size),
         )
-        
+        self.norm_latent = nn.LayerNorm(Config.hidden_size)
                                             
 
     def img_to_tokens(self, x):
@@ -162,12 +162,13 @@ class Transformer(nn.Module):
 
     def dynamics(self, scene, movement, prev_state):
         scene_tokens = self.img_to_tokens(scene)
-        prev_state = prev_state.unsqueeze(1)
         conditioning = self.embed_movement(movement).unsqueeze(1)
-        tokens = torch.cat([prev_state, scene_tokens], dim=1)
+        tokens = torch.cat([prev_state.unsqueeze(1), scene_tokens], dim=1)
         for layer in self.rnn_layers:
             tokens = layer(tokens, conditioning)
         new_state = tokens[:, 0, :]
+        new_state = new_state + prev_state
+        new_state = self.norm_latent(new_state)
         return new_state
     
 

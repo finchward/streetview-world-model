@@ -3,9 +3,9 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     #Model Loading config
-    model_name = "tv6.5"
+    model_name = "tv6.6"
     load_model = True
-    loaded_model = "tv6.5"
+    loaded_model = "tv6.6"
     loaded_checkpoint = "main"
 
     #Sampling config
@@ -30,26 +30,26 @@ class Config:
 
     #Training information
     graph_dir = 'graphs'
-    sample_every_x_batches = 99 #avoid being divisible by latent_persistence_turns 
+    sample_every_x_batches = 100 #avoid being divisible by latent_persistence_turns 
     inference_samples = 4
     img_dir = 'images'
-    validation_frequency = 250 #sample 1998 and 500 used to be.
+    validation_frequency = 200 #sample 1998 and 500 used to be.
     validation_samples = 20
-    graph_update_freq = 50
+    graph_update_freq = 2
     recent_losses_shown = 50 #used to be 200
-    loss_bucket_size = 100 #used to be 100
-    save_freq = 150
+    loss_bucket_size = 1 #used to be 100
+    save_freq = 250
 
     #Training
     from_noise = True
-    batch_size = 78
-    effective_batch_size = 78 #256
+    batch_size = 5
+    effective_batch_size = 65 #256
     model_resolution = (384, 512)
-    latent_persistence_turns = 5
-    latent_reset_turns = 1
+    latent_persistence_turns = 2
+    latent_reset_turns = 4
     shortcut_percent = 0.25
     ema_ratio = 0.975 #0.999x
-    max_batches = 500_000_000
+    max_batches = 500_000
     learning_rate = 1e-4 #1e-4
     weight_decay = 0.1
 

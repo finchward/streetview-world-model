@@ -31,7 +31,9 @@ class Trainer:
         self.loss_fn = nn.MSELoss()
 
         self.batch_count = 1
+        self.real_batch_count = 1
         self.batch_losses = []
+        self.displayed_losses = []
         self.val_losses = []
         self.val_indices = []
         self.grapher = Grapher()
@@ -45,6 +47,8 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'batch_count': self.batch_count,
             'batch_losses': self.batch_losses,
+            'real_batch_count': self.real_batch_count,
+            'displayed_losses': self.displayed_losses,
             'val_losses': self.val_losses,
             'val_indices': self.val_indices
         }
@@ -54,8 +58,12 @@ class Trainer:
     def load_checkpoint(self):
         checkpoint_path = Path.cwd() / 'checkpoints' / Config.loaded_model / Config.loaded_checkpoint
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        try:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        except ValueError as e:
+            print("Could not load optimizer state (likely due to new/changed parameters).")
+            print("Reinitializing optimizer. Error was:", e)
         checkpoint_lr = self.optimizer.param_groups[0]['lr']
         if checkpoint_lr != Config.learning_rate:
             for param_group in self.optimizer.param_groups:
@@ -64,11 +72,13 @@ class Trainer:
 
         self.batch_count = checkpoint['batch_count']
         self.batch_losses = checkpoint['batch_losses']
+        self.displayed_losses = checkpoint.get('displayed_losses', [])
+        self.real_batch_count = checkpoint.get('real_batch_count', 1)
         self.val_losses = checkpoint['val_losses']
         self.val_indices = checkpoint['val_indices']
 
     def update_graph(self):
-        losses = self.batch_losses
+        losses = self.displayed_losses
 
         grouped_losses = []
         grouped_indices = []
@@ -90,11 +100,11 @@ class Trainer:
 
         if self.val_losses:
             self.grapher.update_line(0, "Validation", self.val_indices, self.val_losses)
-            for i, val_index in enumerate(self.val_indices):
-                if val_index > self.batch_count - Config.recent_losses_shown:
-                    truncated_val_losses = self.val_losses[i:]
-                    truncated_val_indices = self.val_indices[i:]
-                    self.grapher.update_line(1, "Validation", truncated_val_indices, truncated_val_losses)
+            # for i, val_index in enumerate(self.val_indices):
+            #     if val_index > self.batch_count - Config.recent_losses_shown:
+            #         truncated_val_losses = self.val_losses[i:]
+            #         truncated_val_indices = self.val_indices[i:]
+            #         self.grapher.update_line(1, "Validation", truncated_val_indices, truncated_val_losses)
 
             
 
@@ -151,7 +161,7 @@ class Trainer:
                 prev_img = next_img
 
             self.val_losses.append(total_loss / Config.validation_samples)
-            self.val_indices.append(self.batch_count)
+            self.val_indices.append(self.real_batch_count)
 
     async def train(self):
         self.model.train()
@@ -163,8 +173,12 @@ class Trainer:
         accumulated_batches = 0
         latent_state = torch.zeros((Config.batch_size, Config.hidden_size), device=self.device)
 
-        pbar = tqdm.tqdm(range(self.batch_count, Config.max_batches), initial=self.batch_count, desc=f'Training')
-        for idx in pbar:            
+        displayed_loss_sum = 0
+        loss_count = 0
+        batches_since_validated = 0
+
+        pbar = tqdm.tqdm(range(self.real_batch_count, Config.max_batches), total=Config.max_batches, initial=self.real_batch_count, desc=f'Training')
+        for idx in range(100_000_000_000):            
             await self.simulator.increment()
             movement = (await self.simulator.get_movement()).to(self.device).float() 
             next_img = (await self.simulator.get_images()).to(self.device).float()
@@ -180,10 +194,8 @@ class Trainer:
             self.batch_count += 1      
             total_loss += loss     
 
-            if idx % Config.sample_every_x_batches == 0:
-                with torch.no_grad():
-                    sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
-                    self.model.train()
+            displayed_loss_sum += loss.item()
+            loss_count += 1
 
             prev_img = next_img.detach().clone()           
 
@@ -199,31 +211,47 @@ class Trainer:
                 if accumulated_batches >= Config.effective_batch_size:
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                    accumulated_batches = 0
+                    
+                    
+                    if self.real_batch_count % Config.sample_every_x_batches == 0:
+                        with torch.no_grad():
+                            sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+                            self.model.train()
+
+                    if self.real_batch_count % Config.graph_update_freq == 0:
+                        self.update_graph()
+
+                    if self.real_batch_count % Config.save_freq == 0:
+                        self.save_checkpoint('main')
 
                     self.update_ema(self.ema_model, self.model, Config.ema_ratio)
+
+                    self.displayed_losses.append(displayed_loss_sum / loss_count)
+                    displayed_loss_sum = 0
+                    loss_count = 0
+                    accumulated_batches = 0
+                    batches_since_validated += 1
+                    self.real_batch_count += 1
+                    pbar.update(1)
+                    if batches_since_validated == Config.validation_frequency:
+                        await self.validate()
+                        self.model.train() 
+                        batches_since_validated = 0
 
                 total_loss = torch.zeros((), device=self.device)
                 state_base = Path.cwd() / "states" / Config.model_name
                 state_base.mkdir(parents=True, exist_ok=True)
 
-                state_path = state_base / f"idx_{(idx+1) % (Config.latent_persistence_turns * Config.latent_reset_turns)}.pt"
+                state_path = state_base / f"idx_{(idx) % (Config.latent_persistence_turns * 5)}.pt"
                 torch.save(latent_state, state_path)
                 if idx % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
                     latent_state = torch.zeros_like(latent_state, device=self.device) 
                 else:
-                    latent_state = latent_state.detach()
-
-            if idx % Config.validation_frequency == 0:
-                await self.validate()
-                self.model.train()
+                    latent_state = latent_state.detach()     
                   
-            if idx % Config.save_freq == 0:
-                self.save_checkpoint('main')
+
 
             pbar.set_postfix({"Batch loss": loss.item()})
-            if idx % Config.graph_update_freq == 0:
-                self.update_graph()
 
 
     def update_ema(self, ema_model, model, decay):
