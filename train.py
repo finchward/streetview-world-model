@@ -19,21 +19,20 @@ def print_grad(name):
         print(f"Gradient at {name}: {grad.norm() if grad is not None else 0}")
         return None 
     return hook
-
+ 
 class Trainer:
     def __init__(self, model, simulator, val_simulator):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model.to(self.device)
         self.ema_model = copy.deepcopy(self.model)
+        self.ema_model.eval()
         self.optimizer = optim.AdamW(self.model.parameters(), lr=Config.learning_rate, weight_decay=Config.weight_decay)
         self.simulator = simulator
         self.val_simulator = val_simulator
         self.loss_fn = nn.MSELoss()
 
         self.batch_count = 1
-        self.real_batch_count = 1
         self.batch_losses = []
-        self.displayed_losses = []
         self.val_losses = []
         self.val_indices = []
         self.grapher = Grapher()
@@ -47,8 +46,6 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'batch_count': self.batch_count,
             'batch_losses': self.batch_losses,
-            'real_batch_count': self.real_batch_count,
-            'displayed_losses': self.displayed_losses,
             'val_losses': self.val_losses,
             'val_indices': self.val_indices
         }
@@ -72,13 +69,11 @@ class Trainer:
 
         self.batch_count = checkpoint['batch_count']
         self.batch_losses = checkpoint['batch_losses']
-        self.displayed_losses = checkpoint.get('displayed_losses', [])
-        self.real_batch_count = checkpoint.get('real_batch_count', 1)
         self.val_losses = checkpoint['val_losses']
         self.val_indices = checkpoint['val_indices']
 
     def update_graph(self):
-        losses = self.displayed_losses
+        losses = self.batch_losses
 
         grouped_losses = []
         grouped_indices = []
@@ -161,97 +156,86 @@ class Trainer:
                 prev_img = next_img
 
             self.val_losses.append(total_loss / Config.validation_samples)
-            self.val_indices.append(self.real_batch_count)
+            self.val_indices.append(self.batch_count)
 
     async def train(self):
         self.model.train()
         prev_img = (await self.simulator.get_images()).to(self.device).float()
         prev_img = self.model.encode_image(prev_img)
-        print(prev_img.shape)
-        total_loss = 0
         self.optimizer.zero_grad()
-        accumulated_batches = 0
-        latent_state = torch.zeros((Config.batch_size, Config.hidden_size), device=self.device)
+        latent_state = torch.zeros((Config.minibatch_size, Config.hidden_size), device=self.device)
 
-        displayed_loss_sum = 0
-        loss_count = 0
-        batches_since_validated = 0
+        minibatches_per_batch = math.ceil(Config.batch_size / Config.minibatch_size)
+        steps_per_batch = minibatches_per_batch * Config.rollout_steps
 
-        pbar = tqdm.tqdm(range(self.real_batch_count, Config.max_batches), total=Config.max_batches, initial=self.real_batch_count, desc=f'Training')
-        for idx in range(100_000_000_000):            
-            await self.simulator.increment()
-            movement = (await self.simulator.get_movement()).to(self.device).float() 
-            next_img = (await self.simulator.get_images()).to(self.device).float()
-            next_img = self.model.encode_image(next_img)
 
-            latent_state = self.model.predict_dynamics(prev_img, movement, latent_state)
-            if torch.rand(1).item() < Config.shortcut_percent:
-                loss = await self.train_batch_shortcut(latent_state, Config.batch_size, next_img)
-            else:
-                loss = await self.train_batch(latent_state, Config.batch_size, next_img)
+        scaler = torch.amp.GradScaler(self.device.type)
+        pbar = tqdm.tqdm(range(self.batch_count, Config.max_batches), total=Config.max_batches, initial=self.batch_count, desc=f'Training')
+        for batch in pbar:
+            sampled_this_batch = False
+            total_loss_this_batch = 0
+            for minibatch in range(minibatches_per_batch):
+                rollout_loss = 0
+                for time_step in range(Config.rollout_steps):
+                    await self.simulator.increment()
+                    movement = (await self.simulator.get_movement()).to(self.device).float() 
+                    next_img = (await self.simulator.get_images()).to(self.device).float()
 
-            self.batch_losses.append(loss.item())
-            self.batch_count += 1      
-            total_loss += loss     
+                    with torch.autocast(device_type=self.device.type):
+                        next_img = self.model.encode_image(next_img)
+                        latent_state = self.model.predict_dynamics(prev_img, movement, latent_state)
+                        if torch.rand(1).item() < Config.shortcut_percent:
+                            loss = await self.train_batch_shortcut(latent_state, Config.minibatch_size, next_img)
+                        else:
+                            loss = await self.train_batch(latent_state, Config.minibatch_size, next_img)
 
-            displayed_loss_sum += loss.item()
-            loss_count += 1
+                    self.batch_count += 1      
+                    rollout_loss += loss
+                    total_loss_this_batch += loss.item()
 
-            prev_img = next_img.detach().clone()           
-
-            if idx % Config.latent_persistence_turns == 0:
-                
-                total_loss = total_loss / (Config.effective_batch_size / Config.batch_size)
-                effective_loss = total_loss / Config.latent_persistence_turns
-                effective_loss.backward()
-
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0) #Enable if gradients explode
-                #self.debug()
-                accumulated_batches += Config.batch_size
-                if accumulated_batches >= Config.effective_batch_size:
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-                    
-                    
-                    if self.real_batch_count % Config.sample_every_x_batches == 0:
+                    if (batch % Config.sample_freq == 0) and not sampled_this_batch:
+                        sampled_this_batch = True
                         with torch.no_grad():
-                            sample_next_img(self.model, self.device, f"batch_{idx}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+                            sample_next_img(self.model, self.device, f"batch_{batch}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
                             self.model.train()
 
-                    if self.real_batch_count % Config.graph_update_freq == 0:
-                        self.update_graph()
+                    prev_img = next_img.detach().clone()           
+                
+                rollout_loss /= steps_per_batch
+                scaler.scale(rollout_loss).backward()
 
-                    if self.real_batch_count % Config.save_freq == 0:
-                        self.save_checkpoint('main')
+                #if gonna enable clipping make sure it works with amp.
+                #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
-                    self.update_ema(self.ema_model, self.model, Config.ema_ratio)
-
-                    self.displayed_losses.append(displayed_loss_sum / loss_count)
-                    displayed_loss_sum = 0
-                    loss_count = 0
-                    accumulated_batches = 0
-                    batches_since_validated += 1
-                    self.real_batch_count += 1
-                    pbar.update(1)
-                    if batches_since_validated == Config.validation_frequency:
-                        await self.validate()
-                        self.model.train() 
-                        batches_since_validated = 0
-
-                total_loss = torch.zeros((), device=self.device)
-                state_base = Path.cwd() / "states" / Config.model_name
-                state_base.mkdir(parents=True, exist_ok=True)
-
-                state_path = state_base / f"idx_{(idx) % (Config.latent_persistence_turns * 5)}.pt"
-                torch.save(latent_state, state_path)
-                if idx % (Config.latent_persistence_turns * Config.latent_reset_turns) == 0: 
+                if (batch * minibatches_per_batch + minibatch) % Config.rollouts_per_episode == 0:
                     latent_state = torch.zeros_like(latent_state, device=self.device) 
                 else:
-                    latent_state = latent_state.detach()     
-                  
+                    latent_state = latent_state.detach()  
 
+            scaler.step(self.optimizer)
+            scaler.update()
+            self.optimizer.zero_grad()
+            self.update_ema(self.ema_model, self.model, Config.ema_ratio)
 
-            pbar.set_postfix({"Batch loss": loss.item()})
+            batch_loss = total_loss_this_batch / steps_per_batch
+            self.batch_losses.append(batch_loss)
+
+            if batch % Config.graph_update_freq == 0:
+                self.update_graph()
+
+            if batch % Config.save_freq == 0:
+                self.save_checkpoint('main')
+
+            if batch % Config.val_freq == 0:
+                await self.validate()
+                self.model.train() 
+
+            state_base = Path.cwd() / "states" / Config.model_name
+            state_base.mkdir(parents=True, exist_ok=True)
+            state_path = state_base / f"idx_{batch % 10}.pt"
+            torch.save(latent_state, state_path)
+                
+            pbar.set_postfix({"Batch loss": batch_loss})
 
 
     def update_ema(self, ema_model, model, decay):
