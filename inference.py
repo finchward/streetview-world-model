@@ -17,8 +17,6 @@ fig, axes, ims = None, None, None
 @torch.no_grad()
 def sample_next_img(model, device, sample_name, prev_img, latent, next_img=None):
     model.eval()
-
-
     starting_img = torch.randn_like(prev_img)
 
     # Sampling loop

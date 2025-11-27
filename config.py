@@ -3,7 +3,7 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     #Model Loading config
-    model_name = "tv6.6"
+    model_name = "tv6.7s"
     load_model = True
     loaded_model = "tv6.6"
     loaded_checkpoint = "main"
@@ -30,7 +30,7 @@ class Config:
 
     #Training information
     graph_dir = 'graphs'
-    sample_freq = 100 #avoid being divisible by latent_persistence_turns 
+    sample_freq = 5 #avoid being divisible by latent_persistence_turns 
     inference_samples = 4
     img_dir = 'images'
     val_freq = 200 #sample 1998 and 500 used to be.

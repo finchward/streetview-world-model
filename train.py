@@ -168,6 +168,10 @@ class Trainer:
         minibatches_per_batch = math.ceil(Config.batch_size / Config.minibatch_size)
         steps_per_batch = minibatches_per_batch * Config.rollout_steps
 
+        is_cuda = self.device.type == "cuda"
+        if not is_cuda:
+            print("No cuda detected.")
+        amp_dtype = torch.float16 if is_cuda else torch.bfloat16
 
         scaler = torch.amp.GradScaler(self.device.type)
         pbar = tqdm.tqdm(range(self.batch_count, Config.max_batches), total=Config.max_batches, initial=self.batch_count, desc=f'Training')
@@ -181,8 +185,14 @@ class Trainer:
                     movement = (await self.simulator.get_movement()).to(self.device).float() 
                     next_img = (await self.simulator.get_images()).to(self.device).float()
 
-                    with torch.autocast(device_type=self.device.type):
+                    #DO NOT PUT ENCODER IN AUTOCAST. I think it was trained in bf16 so it breaks.
+                    with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16, enabled=is_cuda):
                         next_img = self.model.encode_image(next_img)
+                    
+                    next_img.to(torch.float16)
+
+                    with torch.autocast(device_type=self.device.type, dtype=amp_dtype, enabled=is_cuda):
+                        
                         latent_state = self.model.predict_dynamics(prev_img, movement, latent_state)
                         if torch.rand(1).item() < Config.shortcut_percent:
                             loss = await self.train_batch_shortcut(latent_state, Config.minibatch_size, next_img)
@@ -196,7 +206,7 @@ class Trainer:
                     if (batch % Config.sample_freq == 0) and not sampled_this_batch:
                         sampled_this_batch = True
                         with torch.no_grad():
-                            sample_next_img(self.model, self.device, f"batch_{batch}", prev_img[0:1, :, :, :].detach(), latent_state[0:1, :].detach(), next_img[0:1, :, :, :].detach())
+                            sample_next_img(self.model, self.device, f"batch_{batch}", prev_img[0:1, :, :, :].detach().to(torch.float32), latent_state[0:1, :].detach().to(torch.float32), next_img[0:1, :, :, :].detach().to(torch.float32))
                             self.model.train()
 
                     prev_img = next_img.detach().clone()           
